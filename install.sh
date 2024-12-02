@@ -38,24 +38,47 @@ fi
 
 # 确定具体的发行版
 case $OS in
-    ubuntu|debian|raspbian)
-        DISTRO=$OS
+    ubuntu)
+        DISTRO="ubuntu"
         ;;
-    centos|rhel|fedora|rocky|almalinux)
-        if [ "$OS" = "rhel" ] || [ "$OS" = "centos" ] || [ "$OS" = "rocky" ] || [ "$OS" = "almalinux" ]; then
-            DISTRO="centos"
-        else
-            DISTRO=$OS
-        fi
+    debian)
+        DISTRO="debian"
+        ;;
+    centos)
+        DISTRO="centos"
+        ;;
+    fedora)
+        DISTRO="fedora"
         ;;
     opensuse*|sles)
         DISTRO="openSUSE"
         ;;
-    arch|manjaro)
+    arch)
         DISTRO="arch"
+        ;;
+    manjaro)
+        DISTRO="manjaro"
         ;;
     kali)
         DISTRO="kali"
+        ;;
+    mint)
+        DISTRO="mint"
+        ;;
+    anolis)
+        DISTRO="anolis"
+        ;;
+    rocky)
+        DISTRO="rocky"
+        ;;
+    gentoo)
+        DISTRO="gentoo"
+        ;;
+    mageia)
+        DISTRO="mageia"
+        ;;
+    raspbian)
+        DISTRO="rpi"
         ;;
     *)
         echo "不支持的操作系统: $OS"
