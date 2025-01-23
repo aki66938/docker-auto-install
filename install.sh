@@ -107,6 +107,9 @@ fi
 
 # 确定具体的发行版
 case $OS in
+    alpine)
+        DISTRO="alpine"
+        ;;
     ubuntu)
         DISTRO="ubuntu"
         ;;
