@@ -1,26 +1,36 @@
-# Linux Mint系统 Docker 和 Docker Compose 安装指南
+# Linux Mint系统 Docker 安装指南
 
-本文档提供了在Linux Mint系统上安装Docker和Docker Compose的脚本和使用说明。
+本文档提供了在Linux Mint系统上安装Docker的脚本和使用说明。
 
 ## 系统要求
 
-- Linux Mint 19或更高版本
-- 64位系统
+- Linux Mint 21.x 或更高版本
+- 64位系统架构 (x86_64, aarch64, armv7l)
 - 内核版本3.10或更高
+- 最小2GB内存（推荐4GB以上）
+- 支持以下特性：
+  - overlay2文件系统
+  - cgroup v2
+  - 用户命名空间
+  - seccomp
 
 ## 特别说明
 
 本安装脚本包含以下特性：
-1. 自动检测Linux Mint和基础Ubuntu版本
-2. 配置腾讯云镜像加速
-3. 使用Ubuntu的Docker仓库
-4. 配置开机自启动
+1. 自动检测系统架构和版本兼容性
+2. 使用官方Ubuntu Docker仓库
+3. 配置安全加固选项
+4. 启用用户命名空间隔离
+5. 自动清理未使用的资源
+6. 优化的系统参数和内核模块配置
+7. 完整的日志记录和错误处理
 
 ## 安装步骤
 
 1. 首先，确保系统已更新到最新：
    ```bash
-   sudo apt update && sudo apt upgrade -y
+   sudo apt update
+   sudo apt upgrade -y
    ```
 
 2. 下载安装脚本后，添加执行权限：
@@ -44,7 +54,10 @@
 docker --version
 
 # 检查Docker Compose版本
-docker-compose --version
+docker compose version
+
+# 检查Docker Buildx版本
+docker buildx version
 
 # 验证Docker权限
 docker ps
@@ -53,142 +66,227 @@ docker ps
 docker run hello-world
 ```
 
-## 镜像加速配置
+## Docker守护进程配置
 
-脚本已自动配置腾讯云镜像加速。如需手动修改，编辑文件：
-```bash
-sudo vim /etc/docker/daemon.json
-```
+脚本已配置了优化的Docker daemon设置。配置文件位于 `/etc/docker/daemon.json`：
 
-默认配置如下：
 ```json
 {
-  "registry-mirrors": ["https://mirror.ccs.tencentyun.com"]
+    "storage-driver": "overlay2",
+    "storage-opts": [
+        "overlay2.override_kernel_check=true"
+    ],
+    "log-driver": "json-file",
+    "log-opts": {
+        "max-size": "100m",
+        "max-file": "3"
+    },
+    "registry-mirrors": ["https://mirror.ccs.tencentyun.com"],
+    "features": {
+        "buildkit": true
+    },
+    "experimental": false,
+    "metrics-addr": "127.0.0.1:9323",
+    "max-concurrent-downloads": 10,
+    "max-concurrent-uploads": 5,
+    "default-ulimits": {
+        "nofile": {
+            "Name": "nofile",
+            "Hard": 64000,
+            "Soft": 64000
+        }
+    },
+    "userns-remap": "default",
+    "live-restore": true,
+    "log-level": "info",
+    "userland-proxy": false,
+    "no-new-privileges": true
 }
 ```
 
+## 系统优化配置
+
+### 内核参数
+
+脚本已配置了优化的系统参数（`/etc/sysctl.d/docker.conf`）：
+
+```bash
+# 网络设置
+net.ipv4.ip_forward = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.conf.all.forwarding = 1
+net.ipv6.conf.all.forwarding = 1
+
+# 内核参数
+kernel.pid_max = 4194304
+fs.file-max = 1000000
+fs.inotify.max_user_watches = 524288
+fs.inotify.max_user_instances = 8192
+
+# 网络调优
+net.core.somaxconn = 32768
+net.ipv4.tcp_max_syn_backlog = 8192
+net.core.netdev_max_backlog = 16384
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_tw_reuse = 1
+```
+
+### 内核模块
+
+必要的内核模块（`/etc/modules-load.d/docker.conf`）：
+
+```bash
+overlay
+br_netfilter
+ip_vs
+ip_vs_rr
+ip_vs_wrr
+ip_vs_sh
+nf_conntrack
+```
+
+## 安全特性
+
+1. **用户命名空间隔离**：
+   - 默认启用用户命名空间重映射
+   - 增强容器与主机的隔离性
+
+2. **资源限制**：
+   - 配置了默认的ulimit值
+   - 可通过daemon.json进一步定制
+
+3. **特权限制**：
+   - 启用no-new-privileges
+   - 限制容器获取新特权的能力
+
+4. **日志管理**：
+   - 配置了日志轮转
+   - 限制了日志文件大小和数量
+
+5. **自动清理**：
+   - 每周自动清理未使用的容器、镜像和卷
+   - 防止磁盘空间耗尽
+
 ## 常用Docker命令
 
-- 启动Docker服务：
+- 管理Docker服务：
   ```bash
-  sudo systemctl start docker
+  sudo systemctl start docker    # 启动
+  sudo systemctl stop docker     # 停止
+  sudo systemctl status docker   # 查看状态
+  sudo systemctl enable docker   # 开机自启
   ```
 
-- 停止Docker服务：
+- 容器管理：
   ```bash
-  sudo systemctl stop docker
+  docker ps                      # 列出运行容器
+  docker ps -a                   # 列出所有容器
+  docker start <container>       # 启动容器
+  docker stop <container>        # 停止容器
+  docker rm <container>          # 删除容器
   ```
 
-- 查看Docker状态：
+- 镜像管理：
   ```bash
-  sudo systemctl status docker
+  docker images                  # 列出镜像
+  docker pull <image>           # 拉取镜像
+  docker rmi <image>            # 删除镜像
+  docker build -t <tag> .       # 构建镜像
   ```
 
-- 设置Docker开机自启：
+- 系统维护：
   ```bash
-  sudo systemctl enable docker
+  docker system df              # 查看空间使用
+  docker system prune          # 清理未使用资源
+  docker system events         # 查看系统事件
   ```
-
-## 防火墙配置
-
-如果开启了防火墙，需要放行Docker端口：
-
-```bash
-# 如果使用UFW（Linux Mint默认防火墙）
-sudo ufw allow 2375/tcp
-sudo ufw allow 2376/tcp
-
-# 重新加载防火墙配置
-sudo ufw reload
-```
-
-## 卸载说明
-
-如需卸载Docker和Docker Compose，执行以下命令：
-
-```bash
-# 停止所有运行中的容器
-docker stop $(docker ps -aq)
-
-# 删除所有容器
-docker rm $(docker ps -aq)
-
-# 删除所有镜像
-docker rmi $(docker images -q)
-
-# 停止Docker服务
-sudo systemctl stop docker
-
-# 卸载Docker包
-sudo apt-get purge -y docker-ce docker-ce-cli containerd.io
-sudo apt-get autoremove -y
-
-# 删除Docker数据目录
-sudo rm -rf /var/lib/docker
-sudo rm -rf /var/lib/containerd
-
-# 删除Docker Compose
-sudo rm /usr/local/bin/docker-compose
-
-# 删除Docker配置
-sudo rm -rf /etc/docker
-sudo rm /etc/apt/sources.list.d/docker.list
-```
 
 ## 故障排除
 
-1. 如果出现权限错误：
+1. 权限问题：
    ```bash
-   # 确认当前用户在docker组中
+   # 检查用户组
    groups
-   # 如果没有，手动添加
+   # 添加用户到docker组
    sudo usermod -aG docker $USER
    ```
 
-2. 如果Docker守护进程无法启动：
+2. 服务问题：
    ```bash
-   # 检查系统日志
+   # 查看服务日志
    sudo journalctl -u docker.service
+   # 查看Docker守护进程日志
+   sudo tail -f /var/log/docker.log
    ```
 
 3. 存储问题：
    ```bash
    # 检查磁盘空间
    df -h
-   # 清理未使用的Docker资源
-   docker system prune
+   # 查看Docker使用空间
+   docker system df -v
    ```
 
-4. APT源问题：
+4. 网络问题：
    ```bash
-   # 检查APT源列表
-   cat /etc/apt/sources.list.d/docker.list
-   # 更新包索引
-   sudo apt update
+   # 检查网络接口
+   ip addr show docker0
+   # 检查iptables规则
+   sudo iptables -L
    ```
 
-## 性能优化建议
+## 性能监控
 
-1. 使用overlay2存储驱动：
-   ```json
-   {
-     "storage-driver": "overlay2"
-   }
+1. 使用内置指标：
+   ```bash
+   # 容器统计
+   docker stats
+   # 系统信息
+   docker info
    ```
 
-2. 限制容器日志大小：
-   ```json
-   {
-     "log-driver": "json-file",
-     "log-opts": {
-       "max-size": "10m",
-       "max-file": "3"
-     }
-   }
+2. 使用外部工具：
+   ```bash
+   # 使用ctop查看容器性能
+   docker run --rm -ti \
+     --name=ctop \
+     --volume /var/run/docker.sock:/var/run/docker.sock:ro \
+     quay.io/vektorlab/ctop:latest
    ```
+
+## 卸载说明
+
+如需完全卸载Docker，执行以下步骤：
+
+```bash
+# 1. 停止所有容器
+docker stop $(docker ps -aq)
+
+# 2. 删除所有容器、网络、镜像和卷
+docker system prune -af --volumes
+
+# 3. 停止Docker服务
+sudo systemctl stop docker
+sudo systemctl disable docker
+
+# 4. 卸载Docker包
+sudo apt remove -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# 5. 删除数据和配置
+sudo rm -rf /var/lib/docker
+sudo rm -rf /var/lib/containerd
+sudo rm -rf /etc/docker
+sudo rm -f /etc/apt/sources.list.d/docker.list
+sudo rm -f /etc/apt/keyrings/docker.asc
+sudo rm -f /etc/sysctl.d/docker.conf
+sudo rm -f /etc/modules-load.d/docker.conf
+sudo rm -f /etc/cron.weekly/docker-cleanup
+```
 
 ## 其他资源
 
 - [Docker官方文档](https://docs.docker.com/)
 - [Docker Hub](https://hub.docker.com/)
 - [Linux Mint官方文档](https://linuxmint.com/documentation.php)
+- [Docker安全最佳实践](https://docs.docker.com/engine/security/)

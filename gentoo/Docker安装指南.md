@@ -8,6 +8,8 @@
 - 64位系统
 - 正确配置的内核（包含必要的内核选项）
 - Portage包管理系统
+- 至少4GB内存（推荐8GB）
+- 支持的CPU架构：amd64, arm64, ppc64le
 
 ## 内核配置要求
 
@@ -50,6 +52,9 @@ Device Drivers:
 File systems:
     [*] Overlay filesystem support
     [*] Btrfs filesystem support (optional)
+    [*] Ext4 filesystem support
+        [*] Ext4 POSIX Access Control Lists
+        [*] Ext4 Security Labels
 ```
 
 ## 特别说明
@@ -62,6 +67,9 @@ File systems:
 5. 启用overlay2存储驱动
 6. NVIDIA Docker支持（如果检测到NVIDIA显卡）
 7. 系统性能优化
+8. BuildKit和实验性功能支持
+9. 指标收集功能
+10. 高并发下载和上传支持
 
 ## 安装步骤
 
@@ -88,9 +96,10 @@ File systems:
 
 ```bash
 # /etc/portage/package.use/docker
-app-emulation/docker aufs btrfs overlay device-mapper
+app-containers/docker btrfs overlay device-mapper
 sys-libs/libseccomp static-libs
-app-emulation/containerd btrfs
+app-containers/containerd btrfs
+app-containers/docker-cli -cli-plugins
 ```
 
 ## 验证安装
@@ -102,7 +111,10 @@ app-emulation/containerd btrfs
 docker --version
 
 # 检查Docker Compose版本
-docker-compose --version
+docker compose version
+
+# 检查Docker Buildx版本
+docker buildx version
 
 # 验证Docker权限
 docker ps
@@ -127,13 +139,17 @@ sudo vim /etc/docker/daemon.json
   ],
   "log-driver": "json-file",
   "log-opts": {
-    "max-size": "10m",
+    "max-size": "100m",
     "max-file": "3"
   },
-  "registry-mirrors": [
-    "https://mirror.gcr.io",
-    "https://docker.mirrors.ustc.edu.cn"
-  ]
+  "registry-mirrors": ["https://mirror.ccs.tencentyun.com"],
+  "features": {
+    "buildkit": true
+  },
+  "experimental": true,
+  "metrics-addr": "127.0.0.1:9323",
+  "max-concurrent-downloads": 10,
+  "max-concurrent-uploads": 10
 }
 ```
 
@@ -143,7 +159,7 @@ sudo vim /etc/docker/daemon.json
 
 ```bash
 # 安装NVIDIA Docker工具包
-sudo emerge -av app-emulation/nvidia-container-toolkit
+sudo emerge -av app-containers/nvidia-container-toolkit
 
 # 验证NVIDIA Docker安装
 docker run --gpus all nvidia/cuda:11.0-base nvidia-smi
@@ -158,7 +174,7 @@ docker run --gpus all nvidia/cuda:11.0-base nvidia-smi
 cat /etc/sysctl.d/99-docker.conf
 
 # 应用优化参数
-sudo sysctl -p /etc/sysctl.d/99-docker.conf
+sudo sysctl --system
 ```
 
 ## 常用Docker命令
@@ -183,24 +199,6 @@ sudo sysctl -p /etc/sysctl.d/99-docker.conf
   sudo rc-update add docker default
   ```
 
-## 镜像加速
-
-脚本已配置国内镜像加速。如需手动修改：
-
-```bash
-sudo vim /etc/docker/daemon.json
-```
-
-添加或修改以下内容：
-```json
-{
-  "registry-mirrors": [
-    "https://mirror.gcr.io",
-    "https://docker.mirrors.ustc.edu.cn"
-  ]
-}
-```
-
 ## 卸载说明
 
 如需卸载Docker和Docker Compose，执行以下命令：
@@ -222,10 +220,14 @@ sudo rc-service docker stop
 sudo rc-update del docker default
 
 # 卸载Docker包
-sudo emerge -C app-emulation/docker app-containers/docker-compose
+sudo emerge -C app-containers/docker \
+    app-containers/docker-compose \
+    app-containers/docker-buildx \
+    app-containers/docker-cli \
+    app-containers/containerd
 
 # 如果安装了NVIDIA Docker支持
-sudo emerge -C app-emulation/nvidia-container-toolkit
+sudo emerge -C app-containers/nvidia-container-toolkit
 
 # 删除Docker数据目录
 sudo rm -rf /var/lib/docker
@@ -250,10 +252,10 @@ sudo rm -rf /etc/docker
 2. USE标志问题：
    ```bash
    # 检查USE标志
-   emerge -pv app-emulation/docker
+   emerge -pv app-containers/docker
    
    # 更新USE标志后重新编译
-   emerge --newuse app-emulation/docker
+   emerge --newuse app-containers/docker
    ```
 
 3. 权限问题：

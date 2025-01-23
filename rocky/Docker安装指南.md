@@ -1,21 +1,34 @@
 # Rocky Linux系统 Docker 和 Docker Compose 安装指南
 
-本文档提供了在Rocky Linux系统上安装Docker和Docker Compose的脚本和使用说明。
+本文档提供了在Rocky Linux系统上安装Docker和Docker Compose的详细说明。
 
 ## 系统要求
 
 - Rocky Linux 8或更高版本
-- 64位系统
+- 64位系统架构（x86_64、aarch64或armv7l）
 - 内核版本4.18或更高
+- 至少2GB内存（推荐4GB或更多）
+- 至少20GB可用磁盘空间
+- 支持的文件系统：ext4、xfs、overlay2
+- 已启用以下内核模块：
+  - overlay：用于overlay2存储驱动
+  - br_netfilter：用于容器网络
+  - ip_vs*：用于负载均衡
+  - nf_conntrack：用于连接跟踪
 
 ## 特别说明
 
 本安装脚本包含以下特性：
-1. 自动检测Rocky Linux版本
+1. 自动检测系统架构和硬件要求
 2. 配置腾讯云镜像加速
 3. 自动清理旧版本Docker
 4. 配置开机自启动
 5. 自动替换仓库配置以适配Rocky Linux
+6. 优化内核参数和系统限制
+7. 配置SELinux和防火墙规则
+8. 支持NVIDIA Container Runtime
+9. 安装容器监控工具（ctop）
+10. 启用BuildKit和Compose插件
 
 ## 安装步骤
 
@@ -45,169 +58,412 @@
 docker --version
 
 # 检查Docker Compose版本
-docker-compose --version
+docker compose version
+
+# 检查Docker Buildx版本
+docker buildx version
 
 # 验证Docker权限
 docker ps
 
 # 运行测试容器
 docker run hello-world
+
+# 检查Docker信息
+docker info
 ```
 
-## 镜像加速配置
+## Docker守护进程配置
 
-脚本已自动配置腾讯云镜像加速。如需手动修改，编辑文件：
+脚本已配置了优化的Docker daemon设置。配置文件位于：
 ```bash
 sudo vim /etc/docker/daemon.json
 ```
 
-默认配置如下：
+默认配置说明：
 ```json
 {
-  "registry-mirrors": ["https://mirror.ccs.tencentyun.com"]
+    "storage-driver": "overlay2",
+    "storage-opts": [
+        "overlay2.override_kernel_check=true"
+    ],
+    "log-driver": "json-file",
+    "log-opts": {
+        "max-size": "100m",
+        "max-file": "3"
+    },
+    "registry-mirrors": [
+        "https://mirror.ccs.tencentyun.com"
+    ],
+    "features": {
+        "buildkit": true
+    },
+    "experimental": false,
+    "metrics-addr": "127.0.0.1:9323",
+    "max-concurrent-downloads": 10,
+    "max-concurrent-uploads": 5,
+    "default-ulimits": {
+        "nofile": {
+            "Name": "nofile",
+            "Hard": 64000,
+            "Soft": 64000
+        }
+    },
+    "live-restore": true,
+    "log-level": "info",
+    "userland-proxy": false,
+    "no-new-privileges": true,
+    "selinux-enabled": true,
+    "default-runtime": "runc",
+    "runtimes": {
+        "runc": {
+            "path": "runc"
+        }
+    }
 }
 ```
 
-## 常用Docker命令
+## 系统优化配置
 
-- 启动Docker服务：
-  ```bash
-  sudo systemctl start docker
-  ```
+### 1. 内核参数
 
-- 停止Docker服务：
-  ```bash
-  sudo systemctl stop docker
-  ```
+脚本已配置了优化的系统参数。配置文件位于：
+```bash
+/etc/sysctl.d/docker.conf
+```
 
-- 查看Docker状态：
-  ```bash
-  sudo systemctl status docker
-  ```
+主要参数说明：
+```bash
+# 网络设置
+net.ipv4.ip_forward = 1                    # 启用IP转发
+net.bridge.bridge-nf-call-iptables = 1     # 启用桥接防火墙
+net.ipv4.conf.all.forwarding = 1           # 启用所有接口的IP转发
+net.ipv4.conf.all.rp_filter = 1            # 启用反向路径过滤
 
-- 设置Docker开机自启：
-  ```bash
-  sudo systemctl enable docker
-  ```
+# 内核参数
+kernel.pid_max = 4194304                   # 最大进程ID
+fs.file-max = 1000000                      # 最大文件句柄数
+fs.inotify.max_user_watches = 524288       # inotify监视限制
+fs.inotify.max_user_instances = 512        # inotify实例限制
 
-## SELinux注意事项
+# 网络调优
+net.core.somaxconn = 32768                 # 连接队列大小
+net.ipv4.tcp_max_syn_backlog = 8192        # TCP SYN队列大小
+net.core.netdev_max_backlog = 16384        # 网络设备积压队列大小
+net.ipv4.tcp_slow_start_after_idle = 0     # 禁用空闲后的慢启动
+net.ipv4.tcp_tw_reuse = 1                  # 启用TIME-WAIT重用
 
-如果您的Rocky Linux启用了SELinux，可能需要进行以下配置：
+# TCP优化
+net.ipv4.tcp_rmem = 4096 87380 16777216    # TCP读缓冲区
+net.ipv4.tcp_wmem = 4096 87380 16777216    # TCP写缓冲区
+net.ipv4.tcp_mtu_probing = 1               # 启用MTU探测
+net.ipv4.tcp_congestion_control = bbr      # 使用BBR拥塞控制
+```
 
-1. 检查SELinux状态：
-   ```bash
-   getenforce
-   ```
+### 2. 系统限制
 
-2. 如果需要，可以临时禁用SELinux：
-   ```bash
-   sudo setenforce 0
-   ```
+系统限制配置文件位于：
+```bash
+/etc/security/limits.d/docker.conf
+```
 
-3. 或者配置Docker的SELinux规则：
-   ```bash
-   sudo setsebool -P container_manage_cgroup 1
-   ```
+配置说明：
+```bash
+*       soft    nofile      1048576        # 文件描述符软限制
+*       hard    nofile      1048576        # 文件描述符硬限制
+*       soft    nproc       unlimited      # 进程数软限制
+*       hard    nproc       unlimited      # 进程数硬限制
+*       soft    core        unlimited      # 核心转储软限制
+*       hard    core        unlimited      # 核心转储硬限制
+*       soft    memlock     unlimited      # 内存锁定软限制
+*       hard    memlock     unlimited      # 内存锁定硬限制
+```
 
-## 防火墙配置
+## 安全配置
 
-如果开启了防火墙，需要放行Docker端口：
+### 1. SELinux配置
+
+SELinux提供了强制访问控制（MAC）系统：
 
 ```bash
-# 开放Docker守护进程端口
+# 检查SELinux状态
+getenforce
+
+# 查看SELinux上下文
+ls -Z /var/lib/docker
+
+# 配置SELinux策略
+sudo setsebool -P container_manage_cgroup 1
+sudo setsebool -P container_use_devices 0
+```
+
+### 2. 防火墙配置
+
+如果使用firewalld，脚本已配置必要的规则：
+
+```bash
+# 查看防火墙规则
+sudo firewall-cmd --list-all
+
+# 手动配置（如果需要）
 sudo firewall-cmd --permanent --zone=public --add-port=2375/tcp
 sudo firewall-cmd --permanent --zone=public --add-port=2376/tcp
-
-# 重新加载防火墙配置
+sudo firewall-cmd --permanent --zone=public --add-masquerade
 sudo firewall-cmd --reload
 ```
 
-## 卸载说明
+### 3. 容器安全
 
-如需卸载Docker和Docker Compose，执行以下命令：
+推荐的安全实践：
 
 ```bash
-# 停止所有运行中的容器
-docker stop $(docker ps -aq)
+# 扫描镜像漏洞
+docker scan <image-name>
 
-# 删除所有容器
-docker rm $(docker ps -aq)
+# 使用非root用户运行容器
+docker run -u 1000:1000 <image-name>
 
-# 删除所有镜像
-docker rmi $(docker images -q)
+# 限制容器资源
+docker run --cpus=".5" --memory="512m" --pids-limit=100 <image-name>
 
-# 停止Docker服务
-sudo systemctl stop docker
+# 使用只读根文件系统
+docker run --read-only <image-name>
+```
 
-# 卸载Docker包
-sudo dnf remove -y docker-ce docker-ce-cli containerd.io
+### 4. 审计配置
 
-# 删除Docker数据目录
-sudo rm -rf /var/lib/docker
-sudo rm -rf /var/lib/containerd
+启用Docker审计日志：
 
-# 删除Docker Compose
-sudo rm /usr/local/bin/docker-compose
+```bash
+# 安装auditd
+sudo dnf install -y audit
 
-# 删除Docker配置
-sudo rm -rf /etc/docker
+# 配置Docker审计规则
+cat > /etc/audit/rules.d/docker.rules <<EOF
+-w /usr/bin/docker -k docker
+-w /var/lib/docker -k docker
+-w /etc/docker -k docker
+-w /usr/lib/systemd/system/docker.service -k docker
+-w /etc/systemd/system/docker.service -k docker
+-w /usr/lib/systemd/system/docker.socket -k docker
+-w /etc/default/docker -k docker
+EOF
+
+# 重新加载审计规则
+sudo auditctl -R /etc/audit/rules.d/docker.rules
+```
+
+## NVIDIA Container Runtime
+
+如果系统中安装了NVIDIA显卡，脚本会自动安装和配置NVIDIA容器工具包：
+
+```bash
+# 验证NVIDIA Docker安装
+docker run --gpus all nvidia/cuda:11.0-base nvidia-smi
+
+# 查看NVIDIA运行时配置
+nvidia-container-cli info
+
+# 运行GPU加速容器示例
+docker run --gpus all tensorflow/tensorflow:latest-gpu nvidia-smi
+```
+
+## 性能优化
+
+### 1. 存储优化
+
+```bash
+# 定期清理未使用的资源
+docker system prune -af --volumes
+
+# 监控磁盘使用
+docker system df -v
+
+# 使用多阶段构建减小镜像大小
+FROM golang:1.21 as builder
+WORKDIR /app
+COPY . .
+RUN go build -o main
+
+FROM alpine:latest
+COPY --from=builder /app/main /main
+CMD ["/main"]
+```
+
+### 2. 网络优化
+
+```bash
+# 使用host网络模式提高性能
+docker run --network host myapp
+
+# 使用macvlan网络
+docker network create -d macvlan \
+  --subnet=192.168.1.0/24 \
+  --gateway=192.168.1.1 \
+  -o parent=eth0 macnet
+```
+
+### 3. 内存优化
+
+```bash
+# 限制容器内存
+docker run -m 512m --memory-swap 1g myapp
+
+# 监控容器资源使用
+docker stats
+
+# 使用ctop监控容器
+ctop
+```
+
+## 监控和日志
+
+### 1. 容器监控
+
+```bash
+# 使用ctop监控容器
+ctop
+
+# 查看容器统计信息
+docker stats
+
+# 查看容器进程
+docker top <container-id>
+```
+
+### 2. 日志管理
+
+```bash
+# 查看容器日志
+docker logs -f <container-id>
+
+# 查看Docker守护进程日志
+sudo journalctl -u docker.service
+
+# 配置日志轮转
+cat > /etc/logrotate.d/docker <<EOF
+/var/lib/docker/containers/*/*.log {
+    rotate 7
+    daily
+    compress
+    size=10M
+    missingok
+    delaycompress
+    copytruncate
+}
+EOF
 ```
 
 ## 故障排除
 
-1. 如果出现权限错误：
+### 1. 常见错误
+
+#### 权限问题
+```bash
+# 检查用户组
+groups
+# 添加用户到docker组
+sudo usermod -aG docker $USER
+# 重新加载用户组
+newgrp docker
+```
+
+#### 网络问题
+```bash
+# 检查Docker网络
+docker network ls
+# 重建默认网络
+docker network rm bridge
+docker network create bridge
+```
+
+#### 存储问题
+```bash
+# 检查存储驱动
+docker info | grep "Storage Driver"
+# 清理存储空间
+docker system prune -af
+```
+
+### 2. 日志分析
+
+```bash
+# 查看Docker日志
+sudo journalctl -u docker.service
+
+# 查看容器日志
+docker logs <container-id>
+
+# 启用调试模式
+sudo systemctl edit docker.service
+# 添加以下内容：
+[Service]
+Environment="DOCKER_OPTS=--debug"
+```
+
+### 3. 性能问题
+
+```bash
+# 检查系统负载
+top
+htop
+
+# 检查Docker统计信息
+docker stats
+
+# 检查磁盘I/O
+iostat -x 1
+```
+
+## 最佳实践
+
+1. 定期更新系统和Docker
    ```bash
-   # 确认当前用户在docker组中
-   groups
-   # 如果没有，手动添加
-   sudo usermod -aG docker $USER
+   sudo dnf update -y
    ```
 
-2. 如果Docker守护进程无法启动：
+2. 使用多阶段构建减小镜像大小
+   ```dockerfile
+   FROM golang:1.21 as builder
+   WORKDIR /app
+   COPY . .
+   RUN go build -o main
+
+   FROM alpine:latest
+   COPY --from=builder /app/main /main
+   CMD ["/main"]
+   ```
+
+3. 使用健康检查
+   ```dockerfile
+   HEALTHCHECK --interval=30s --timeout=3s \
+     CMD curl -f http://localhost/ || exit 1
+   ```
+
+4. 实施资源限制
    ```bash
-   # 检查系统日志
-   sudo journalctl -u docker.service
+   docker run \
+     --memory="1g" \
+     --memory-swap="2g" \
+     --cpus="1.5" \
+     --pids-limit=100 \
+     myapp
    ```
 
-3. 存储问题：
+5. 使用安全扫描
    ```bash
-   # 检查磁盘空间
-   df -h
-   # 清理未使用的Docker资源
-   docker system prune
-   ```
-
-4. SELinux相关问题：
-   ```bash
-   # 查看SELinux日志
-   sudo grep docker /var/log/audit/audit.log
-   ```
-
-## 性能优化建议
-
-1. 使用overlay2存储驱动：
-   ```json
-   {
-     "storage-driver": "overlay2",
-     "storage-opts": [
-       "overlay2.override_kernel_check=true"
-     ]
-   }
-   ```
-
-2. 限制容器日志大小：
-   ```json
-   {
-     "log-driver": "json-file",
-     "log-opts": {
-       "max-size": "10m",
-       "max-file": "3"
-     }
-   }
+   # 安装Trivy
+   sudo dnf install -y trivy
+   
+   # 扫描镜像
+   trivy image <image-name>
    ```
 
 ## 其他资源
 
 - [Docker官方文档](https://docs.docker.com/)
+- [Rocky Linux文档](https://docs.rockylinux.org/)
 - [Docker Hub](https://hub.docker.com/)
-- [Rocky Linux官方文档](https://docs.rockylinux.org/)
+- [Docker安全最佳实践](https://docs.docker.com/develop/security-best-practices/)
+- [NVIDIA容器工具包文档](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/overview.html)
+- [Docker性能优化指南](https://docs.docker.com/config/containers/resource_constraints/)

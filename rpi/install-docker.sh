@@ -12,6 +12,13 @@ if ! grep -q "Raspberry Pi" /proc/cpuinfo; then
     exit 1
 fi
 
+# 检查操作系统版本
+. /etc/os-release
+if [[ "$VERSION_CODENAME" != "bookworm" && "$VERSION_CODENAME" != "bullseye" ]]; then
+    echo "此脚本仅支持Raspberry Pi OS Bookworm(12)或Bullseye(11)"
+    exit 1
+fi
+
 # 检查内存大小并设置交换空间
 TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
 echo "检测到系统内存: ${TOTAL_MEM}MB"
@@ -35,6 +42,22 @@ if [ $TOTAL_MEM -lt 2048 ]; then
     fi
 fi
 
+# 卸载旧版本
+echo "卸载旧版本的Docker包..."
+for pkg in docker.io docker-doc docker-compose podman-docker containerd runc; do
+    apt-get remove -y $pkg
+done
+
+# 清理旧的Docker数据目录（可选）
+read -p "是否清理旧的Docker数据？这将删除所有现有的容器和镜像 [y/N] " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo "清理Docker数据目录..."
+    systemctl stop docker || true
+    rm -rf /var/lib/docker
+    rm -rf /var/lib/containerd
+fi
+
 # 更新系统
 echo "更新系统包..."
 apt-get update
@@ -43,37 +66,49 @@ apt-get upgrade -y
 # 安装必要的依赖
 echo "安装必要的依赖..."
 apt-get install -y \
-    apt-transport-https \
     ca-certificates \
     curl \
     gnupg \
-    lsb-release \
-    software-properties-common
+    lsb-release
+
+# 创建keyrings目录
+install -m 0755 -d /etc/apt/keyrings
 
 # 添加Docker的官方GPG密钥
-curl -fsSL https://download.docker.com/linux/raspbian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+curl -fsSL https://download.docker.com/linux/raspbian/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
 
 # 设置Docker仓库
 echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/raspbian \
-  $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/raspbian \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  tee /etc/apt/sources.list.d/docker.list > /dev/null
 
 # 更新包索引
 apt-get update
 
 # 安装Docker
 echo "安装Docker..."
-apt-get install -y docker-ce docker-ce-cli containerd.io
+apt-get install -y \
+    docker-ce \
+    docker-ce-cli \
+    containerd.io \
+    docker-buildx-plugin \
+    docker-compose-plugin
 
 # 启动Docker服务
 systemctl start docker
 systemctl enable docker
 
-# 获取当前登录的非root用户名
-CURRENT_USER=$(who am i | awk '{print $1}')
-
-# 将用户添加到docker组
-usermod -aG docker $CURRENT_USER
+# 配置防火墙（如果启用了firewalld）
+if command -v firewall-cmd >/dev/null 2>&1; then
+    echo "配置防火墙规则..."
+    # 添加docker服务到firewalld
+    firewall-cmd --permanent --zone=trusted --add-interface=docker0
+    firewall-cmd --permanent --zone=public --add-port=2375/tcp
+    firewall-cmd --permanent --zone=public --add-port=2376/tcp
+    firewall-cmd --reload
+fi
 
 # 配置Docker守护进程
 echo "配置Docker守护进程..."
@@ -105,11 +140,6 @@ cat > /etc/docker/daemon.json <<EOF
   }
 }
 EOF
-
-# 安装Docker Compose
-echo "安装Docker Compose..."
-apt-get install -y python3-pip
-pip3 install docker-compose
 
 # 配置系统参数
 echo "配置系统参数..."
@@ -176,13 +206,13 @@ EOF
 # 验证安装
 echo "验证Docker安装..."
 docker --version
-docker-compose --version
+docker compose version
 
 # 运行测试容器
 echo "运行测试容器..."
 docker run hello-world
 
-echo "Docker和Docker Compose安装完成！"
+echo "Docker安装完成！"
 echo "请注意："
 echo "1. 请注销并重新登录以使用户组权限生效"
 echo "2. 已启用overlay2存储驱动"
@@ -195,22 +225,14 @@ echo "7. 建议重启系统以应用所有更改"
 # 显示系统信息
 echo -e "\n系统信息："
 echo "Docker版本：$(docker --version)"
-echo "Docker Compose版本：$(docker-compose --version)"
+echo "Docker Compose版本：$(docker compose version)"
 echo "存储驱动：$(docker info | grep "Storage Driver")"
 echo "内存使用：$(free -h)"
 echo "交换空间：$(swapon --show)"
-echo "SD卡使用：$(df -h /)"
-echo "CPU温度：$(vcgencmd measure_temp)"
-
-# 检查性能限制
-echo -e "\n性能检查："
-echo "CPU频率：$(vcgencmd get_config arm_freq)MHz"
-echo "GPU内存：$(vcgencmd get_mem gpu)MB"
 echo "温度限制：$(vcgencmd get_throttled)"
 
 # 提供性能建议
 echo -e "\n性能建议："
 echo "1. 考虑使用SSD替代SD卡以提高性能"
-echo "2. 监控CPU温度，必要时添加散热器"
-echo "3. 适当增加GPU内存分配（如果运行GUI应用）"
-echo "4. 定期清理Docker缓存和未使用的镜像"
+echo "2. 定期清理不使用的镜像和容器"
+echo "3. 监控系统温度，避免过热"

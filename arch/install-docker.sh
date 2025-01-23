@@ -22,31 +22,23 @@ pacman -S --needed --noconfirm \
     base-devel \
     device-mapper \
     git \
-    wget \
     curl \
-    gnupg \
-    ca-certificates \
-    bridge-utils
+    bridge-utils \
+    iproute2 \
+    fuse-overlayfs \
+    cgroupfs-mount \
+    iptables
 
-# 检查并安装yay（如果需要）
-if ! command -v yay &> /dev/null; then
-    echo "安装yay AUR助手..."
-    # 获取非root用户
-    CURRENT_USER=$(who am i | awk '{print $1}')
-    # 创建临时目录
-    TMP_DIR=$(mktemp -d)
-    cd "$TMP_DIR"
-    # 下载和安装yay
-    sudo -u "$CURRENT_USER" git clone https://aur.archlinux.org/yay.git
-    cd yay
-    sudo -u "$CURRENT_USER" makepkg -si --noconfirm
-    cd
-    rm -rf "$TMP_DIR"
-fi
+# 移除旧版本和冲突包
+echo "移除可能冲突的包..."
+pacman -R --noconfirm docker-compose podman-docker container-tools >/dev/null 2>&1 || true
 
 # 安装Docker
-echo "安装Docker..."
-pacman -S --needed --noconfirm docker docker-compose
+echo "安装Docker和相关组件..."
+pacman -S --needed --noconfirm \
+    docker \
+    docker-buildx \
+    docker-compose
 
 # 启动Docker服务
 echo "启动Docker服务..."
@@ -60,8 +52,8 @@ CURRENT_USER=$(who am i | awk '{print $1}')
 echo "将用户添加到docker组..."
 usermod -aG docker $CURRENT_USER
 
-# 配置存储驱动
-echo "配置Docker存储驱动..."
+# 配置Docker
+echo "配置Docker..."
 mkdir -p /etc/docker
 cat > /etc/docker/daemon.json <<EOF
 {
@@ -71,47 +63,58 @@ cat > /etc/docker/daemon.json <<EOF
   ],
   "log-driver": "json-file",
   "log-opts": {
-    "max-size": "10m",
+    "max-size": "100m",
     "max-file": "3"
-  }
+  },
+  "registry-mirrors": ["https://mirror.ccs.tencentyun.com"],
+  "features": {
+    "buildkit": true
+  },
+  "experimental": true
 }
 EOF
 
 # 配置系统参数
 echo "配置系统参数..."
 # 允许IP转发
-echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/docker.conf
-sysctl -p /etc/sysctl.d/docker.conf
+cat > /etc/sysctl.d/docker.conf <<EOF
+net.ipv4.ip_forward = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+EOF
+sysctl --system
+
+# 配置内核模块
+echo "配置内核模块..."
+cat > /etc/modules-load.d/docker.conf <<EOF
+overlay
+br_netfilter
+EOF
+
+# 加载必要的内核模块
+modprobe overlay
+modprobe br_netfilter
 
 # 重启Docker服务以应用配置
 echo "重启Docker服务..."
 systemctl daemon-reload
 systemctl restart docker
 
-# 安装命令补全
-echo "安装命令补全..."
-# 为bash安装命令补全
-if [ -d /usr/share/bash-completion/completions ]; then
-    curl -L https://raw.githubusercontent.com/docker/compose/master/contrib/completion/bash/docker-compose -o /usr/share/bash-completion/completions/docker-compose
-fi
-
-# 为zsh安装命令补全（如果安装了zsh）
-if [ -d /usr/share/zsh/site-functions ]; then
-    curl -L https://raw.githubusercontent.com/docker/compose/master/contrib/completion/zsh/_docker-compose -o /usr/share/zsh/site-functions/_docker-compose
-fi
-
 # 配置防火墙（如果安装了ufw）
 if command -v ufw >/dev/null 2>&1; then
     echo "配置UFW防火墙规则..."
-    ufw allow 2375/tcp
-    ufw allow 2376/tcp
+    ufw allow 2375/tcp comment 'Docker Remote API'
+    ufw allow 2376/tcp comment 'Docker Secure Remote API'
+    ufw allow 7946/tcp comment 'Docker Swarm'
+    ufw allow 7946/udp comment 'Docker Swarm'
+    ufw allow 4789/udp comment 'Docker Overlay Network'
     ufw reload
 fi
 
 # 验证安装
 echo "验证Docker安装..."
 docker --version
-docker-compose --version
+docker compose version
 
 # 运行测试容器
 echo "运行测试容器..."
@@ -119,27 +122,20 @@ docker run hello-world
 
 echo "Docker和Docker Compose安装完成！"
 echo "请注意："
-echo "1. 请注销并重新登录以使用户组权限生效"
+echo "1. 请注销并重新登录以使用用户组权限生效"
 echo "2. 已启用overlay2存储驱动"
 echo "3. 已配置日志轮转"
-echo "4. 已启用IP转发"
-echo "5. 如果在虚拟机中运行，建议重启系统"
+echo "4. 已启用IP转发和桥接过滤"
+echo "5. 已启用BuildKit和实验性功能"
+echo "6. 已配置腾讯云镜像加速"
+echo "7. 如果在虚拟机中运行，建议重启系统"
 
 # 显示系统信息
 echo -e "\n系统信息："
 echo "Docker版本：$(docker --version)"
-echo "Docker Compose版本：$(docker-compose --version)"
+echo "Docker Compose版本：$(docker compose version)"
 echo "存储驱动：$(docker info | grep "Storage Driver")"
 echo "Cgroup驱动：$(docker info | grep "Cgroup Driver")"
 echo "内核版本：$(uname -r)"
-
-# 检查是否需要额外的内核模块
-echo -e "\n检查内核模块..."
-modules="overlay br_netfilter ip_vs ip_vs_rr ip_vs_wrr ip_vs_sh"
-for module in $modules; do
-    if ! lsmod | grep -q "^$module"; then
-        echo "加载内核模块: $module"
-        modprobe $module
-        echo "$module" >> /etc/modules-load.d/docker.conf
-    fi
-done
+echo "已加载的内核模块："
+lsmod | grep -E "overlay|br_netfilter"

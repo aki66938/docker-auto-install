@@ -1,26 +1,56 @@
 #!/bin/bash
 
+# 设置错误处理
+set -e
+trap 'last_command=$current_command; current_command=$BASH_COMMAND' DEBUG
+trap 'echo "\"${last_command}\" command completed with exit code $?."' EXIT
+
+# 日志函数
+log() {
+    echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $@"
+}
+
 # 检查是否为root用户
 if [ "$EUID" -ne 0 ]; then 
-    echo "请使用root权限运行此脚本"
+    log "请使用root权限运行此脚本"
     exit 1
+fi
+
+# 检查系统架构
+ARCH=$(uname -m)
+case ${ARCH} in
+    x86_64|aarch64|armv7l)
+        log "检测到支持的系统架构: ${ARCH}"
+        ;;
+    *)
+        log "不支持的系统架构: ${ARCH}"
+        exit 1
+        ;;
+esac
+
+# 检查内存
+TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
+if [ ${TOTAL_MEM} -lt 2048 ]; then
+    log "警告: 系统内存小于2GB (${TOTAL_MEM}MB)，可能会影响Docker性能"
 fi
 
 # 检测openSUSE版本
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     SUSE_VERSION=$VERSION_ID
-    echo "检测到openSUSE版本: $SUSE_VERSION"
+    log "检测到openSUSE版本: $VERSION ($VERSION_ID)"
 else
-    echo "无法确定openSUSE版本"
+    log "无法确定openSUSE版本"
     exit 1
 fi
 
 # 更新系统
+log "更新系统..."
 zypper refresh
 zypper update -y
 
 # 删除旧版本Docker（如果存在）
+log "删除旧版本Docker（如果存在）..."
 zypper remove -y docker \
     docker-client \
     docker-client-latest \
@@ -28,105 +58,217 @@ zypper remove -y docker \
     docker-latest \
     docker-latest-logrotate \
     docker-logrotate \
-    docker-engine
+    docker-engine \
+    podman-docker || true
 
 # 安装必要的依赖包
+log "安装必要的依赖包..."
 zypper install -y \
     ca-certificates \
     curl \
-    gnupg \
-    lsb-release \
+    gnupg2 \
     device-mapper \
     git \
-    wget
+    apparmor-parser \
+    iptables \
+    bridge-utils \
+    net-tools \
+    procps \
+    wget \
+    htop \
+    vim
 
 # 添加Docker仓库
-# 首先删除可能存在的旧仓库
-zypper removerepo docker-ce || true
-zypper addrepo https://download.docker.com/linux/opensuse/docker-ce.repo
+log "添加Docker仓库..."
+if ! zypper lr | grep -q "docker"; then
+    # 对于Leap版本
+    if [[ "$VERSION" == *"Leap"* ]]; then
+        zypper addrepo https://download.docker.com/linux/sles/docker-ce.repo
+    else
+        # 对于Tumbleweed版本
+        zypper addrepo https://download.docker.com/linux/opensuse/docker-ce.repo
+    fi
+fi
 
 # 刷新仓库
-zypper refresh
+log "刷新仓库..."
+zypper --gpg-auto-import-keys refresh
 
-# 安装Docker
-zypper install -y docker-ce docker-ce-cli containerd.io
+# 安装Docker和相关组件
+log "安装Docker和相关组件..."
+zypper install -y \
+    docker-ce \
+    docker-ce-cli \
+    containerd.io \
+    docker-buildx-plugin \
+    docker-compose-plugin
 
-# 启动Docker服务
-systemctl start docker
-systemctl enable docker
-
-# 获取当前登录的非root用户名
-CURRENT_USER=$(who am i | awk '{print $1}')
-
-# 将用户添加到docker组
-usermod -aG docker $CURRENT_USER
-
-# 配置存储驱动
+# 配置Docker daemon
+log "配置Docker daemon..."
 mkdir -p /etc/docker
 cat > /etc/docker/daemon.json <<EOF
 {
-  "storage-driver": "overlay2",
-  "storage-opts": [
-    "overlay2.override_kernel_check=true"
-  ]
+    "storage-driver": "overlay2",
+    "storage-opts": [
+        "overlay2.override_kernel_check=true"
+    ],
+    "log-driver": "json-file",
+    "log-opts": {
+        "max-size": "100m",
+        "max-file": "3"
+    },
+    "registry-mirrors": ["https://mirror.ccs.tencentyun.com"],
+    "features": {
+        "buildkit": true
+    },
+    "experimental": false,
+    "metrics-addr": "127.0.0.1:9323",
+    "max-concurrent-downloads": 10,
+    "max-concurrent-uploads": 5,
+    "default-ulimits": {
+        "nofile": {
+            "Name": "nofile",
+            "Hard": 64000,
+            "Soft": 64000
+        }
+    },
+    "userns-remap": "default",
+    "live-restore": true,
+    "log-level": "info",
+    "userland-proxy": false,
+    "no-new-privileges": true
 }
 EOF
 
+# 配置系统参数
+log "配置系统参数..."
+cat > /etc/sysctl.d/docker.conf <<EOF
+# 网络设置
+net.ipv4.ip_forward = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.conf.all.forwarding = 1
+net.ipv6.conf.all.forwarding = 1
+
+# 内核参数
+kernel.pid_max = 4194304
+fs.file-max = 1000000
+fs.inotify.max_user_watches = 524288
+fs.inotify.max_user_instances = 8192
+
+# 网络调优
+net.core.somaxconn = 32768
+net.ipv4.tcp_max_syn_backlog = 8192
+net.core.netdev_max_backlog = 16384
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_tw_reuse = 1
+EOF
+
+# 配置内核模块
+log "配置内核模块..."
+cat > /etc/modules-load.d/docker.conf <<EOF
+overlay
+br_netfilter
+ip_vs
+ip_vs_rr
+ip_vs_wrr
+ip_vs_sh
+nf_conntrack
+EOF
+
+# 加载内核模块
+log "加载内核模块..."
+modprobe overlay
+modprobe br_netfilter
+modprobe ip_vs
+modprobe ip_vs_rr
+modprobe ip_vs_wrr
+modprobe ip_vs_sh
+modprobe nf_conntrack
+
+# 应用系统参数
+log "应用系统参数..."
+sysctl --system
+
 # AppArmor配置（如果启用）
 if command -v apparmor_parser >/dev/null 2>&1; then
-    zypper install -y apparmor-parser
+    log "配置AppArmor..."
     systemctl start apparmor
     systemctl enable apparmor
 fi
 
-# 重启Docker服务以应用配置
-systemctl daemon-reload
-systemctl restart docker
+# 创建docker用户和组
+log "创建docker用户和组..."
+groupadd -f docker
+useradd -r -g docker -s /sbin/nologin docker || true
 
-# 安装Docker Compose
-curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-chmod +x /usr/local/bin/docker-compose
-
-# 安装命令补全
-# 为bash安装命令补全
-if [ -d /etc/bash_completion.d ]; then
-    curl -L https://raw.githubusercontent.com/docker/compose/master/contrib/completion/bash/docker-compose -o /etc/bash_completion.d/docker-compose
+# 获取当前登录的非root用户名
+CURRENT_USER=$(who am i | awk '{print $1}')
+if [ ! -z "$CURRENT_USER" ]; then
+    log "将用户 ${CURRENT_USER} 添加到docker组..."
+    usermod -aG docker $CURRENT_USER
 fi
 
-# 为zsh安装命令补全（如果安装了zsh）
-if [ -d /usr/share/zsh/site-functions ]; then
-    curl -L https://raw.githubusercontent.com/docker/compose/master/contrib/completion/zsh/_docker-compose -o /usr/share/zsh/site-functions/_docker-compose
-fi
+# 配置自动清理
+log "配置自动清理..."
+cat > /etc/cron.weekly/docker-cleanup <<EOF
+#!/bin/sh
+docker system prune -af --volumes
+EOF
+chmod +x /etc/cron.weekly/docker-cleanup
+
+# 启动Docker服务
+log "启动Docker服务..."
+systemctl enable docker
+systemctl start docker
+
+# 等待Docker服务启动
+log "等待Docker服务启动..."
+timeout=30
+while ! docker info >/dev/null 2>&1; do
+    if [ $timeout -le 0 ]; then
+        log "错误: Docker服务启动超时"
+        exit 1
+    fi
+    timeout=$((timeout-1))
+    sleep 1
+done
 
 # 配置防火墙
 if command -v firewall-cmd >/dev/null 2>&1; then
-    # 添加docker服务到防火墙
+    log "配置防火墙规则..."
     firewall-cmd --permanent --zone=public --add-service=docker
     firewall-cmd --permanent --zone=public --add-masquerade
     firewall-cmd --reload
 fi
 
 # 验证安装
-echo "验证Docker安装："
+log "验证Docker安装..."
 docker --version
-echo "验证Docker Compose安装："
-docker-compose --version
+docker compose version
+docker buildx version
 
 # 运行测试容器
-echo "运行测试容器："
-docker run hello-world
+log "运行测试容器..."
+if docker run --rm hello-world >/dev/null; then
+    log "Docker测试成功！"
+else
+    log "警告: Docker测试失败"
+    exit 1
+fi
 
-echo "Docker和Docker Compose安装完成！"
-echo "请注意："
-echo "1. 请注销并重新登录以使用户组权限生效"
-echo "2. 已启用overlay2存储驱动"
-echo "3. 已配置AppArmor（如果可用）"
-echo "4. 已配置防火墙规则"
-echo "5. 如果在虚拟机中运行，建议重启系统"
+log "Docker安装完成！"
+log "请注意："
+log "1. 请注销并重新登录以使用户组权限生效"
+log "2. 如果在虚拟机中运行，建议重启系统"
+log "3. 已启用用户命名空间隔离和其他安全特性"
+log "4. 已配置AppArmor（如果可用）"
+log "5. 已配置防火墙规则"
+log "6. 已配置自动清理未使用的Docker资源"
 
 # 显示系统信息
-echo -e "\n系统信息："
-echo "Docker版本：$(docker --version)"
-echo "Docker Compose版本：$(docker-compose --version)"
-echo "存储驱动：$(docker info | grep "Storage Driver")"
-echo "Cgroup驱动：$(docker info | grep "Cgroup Driver")"
+log "系统信息："
+log "- Docker版本：$(docker --version)"
+log "- Docker Compose版本：$(docker compose version)"
+log "- 存储驱动：$(docker info | grep "Storage Driver")"
+log "- Cgroup驱动：$(docker info | grep "Cgroup Driver")"

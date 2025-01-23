@@ -28,7 +28,8 @@ dnf remove -y docker \
     docker-logrotate \
     docker-selinux \
     docker-engine-selinux \
-    docker-engine
+    docker-engine \
+    podman-docker
 
 # 安装必要的依赖包
 dnf -y install \
@@ -39,8 +40,13 @@ dnf -y install \
 # 添加Docker仓库
 dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
 
-# 安装Docker
-dnf -y install docker-ce docker-ce-cli containerd.io
+# 安装Docker和相关组件
+dnf -y install \
+    docker-ce \
+    docker-ce-cli \
+    containerd.io \
+    docker-buildx-plugin \
+    docker-compose-plugin
 
 # 启动Docker服务
 systemctl start docker
@@ -52,11 +58,17 @@ CURRENT_USER=$(who am i | awk '{print $1}')
 # 将用户添加到docker组
 usermod -aG docker $CURRENT_USER
 
-# 配置存储驱动
+# 配置Docker
 mkdir -p /etc/docker
 cat > /etc/docker/daemon.json <<EOF
 {
-  "storage-driver": "overlay2"
+  "storage-driver": "overlay2",
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "100m",
+    "max-file": "3"
+  },
+  "registry-mirrors": ["https://mirror.ccs.tencentyun.com"]
 }
 EOF
 
@@ -70,19 +82,11 @@ fi
 systemctl daemon-reload
 systemctl restart docker
 
-# 安装Docker Compose
-curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-chmod +x /usr/local/bin/docker-compose
-
-# 安装命令补全
-dnf -y install bash-completion
-curl -L https://raw.githubusercontent.com/docker/compose/master/contrib/completion/bash/docker-compose -o /etc/bash_completion.d/docker-compose
-
 # 验证安装
 echo "验证Docker安装："
 docker --version
 echo "验证Docker Compose安装："
-docker-compose --version
+docker compose version
 
 # 运行测试容器
 echo "运行测试容器："
@@ -90,7 +94,9 @@ docker run hello-world
 
 echo "Docker和Docker Compose安装完成！"
 echo "请注意："
-echo "1. 请注销并重新登录以使用户组权限生效"
+echo "1. 请注销并重新登录以使用用户组权限生效"
 echo "2. 已启用overlay2存储驱动"
 echo "3. 已配置SELinux策略"
-echo "4. 如果在虚拟机中运行，建议重启系统"
+echo "4. 已配置日志轮转"
+echo "5. 已配置腾讯云镜像加速"
+echo "6. 如果在虚拟机中运行，建议重启系统"

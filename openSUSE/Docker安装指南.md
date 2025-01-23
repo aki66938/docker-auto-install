@@ -6,18 +6,23 @@
 
 - openSUSE Leap 15.2或更高版本
 - openSUSE Tumbleweed（滚动发行版）
-- 64位系统
+- 64位系统架构（x86_64、aarch64或armv7l）
 - 内核版本4.18或更高
+- 至少2GB内存（推荐4GB或更多）
 - 至少20GB可用磁盘空间
+- 支持的文件系统：ext4、xfs、overlay2
 
 ## 特别说明
 
 本安装脚本包含以下特性：
-1. 自动检测openSUSE版本
-2. 配置AppArmor（如果可用）
+1. 自动检测系统架构和openSUSE版本
+2. 配置AppArmor增强安全性
 3. 启用overlay2存储驱动
 4. 配置命令补全（支持bash和zsh）
 5. 配置防火墙规则
+6. 启用用户命名空间隔离
+7. 配置系统参数优化
+8. 自动清理未使用的Docker资源
 
 ## 安装步骤
 
@@ -48,199 +53,276 @@
 docker --version
 
 # 检查Docker Compose版本
-docker-compose --version
+docker compose version
+
+# 检查Docker Buildx版本
+docker buildx version
 
 # 验证Docker权限
 docker ps
 
 # 运行测试容器
 docker run hello-world
+
+# 检查Docker信息
+docker info
 ```
 
-## 存储驱动配置
+## Docker守护进程配置
 
-脚本已配置使用overlay2存储驱动。配置文件位于：
+脚本已配置了优化的Docker daemon设置。配置文件位于：
 ```bash
 sudo vim /etc/docker/daemon.json
 ```
 
-默认配置如下：
+默认配置说明：
 ```json
 {
-  "storage-driver": "overlay2",
-  "storage-opts": [
-    "overlay2.override_kernel_check=true"
-  ]
+    "storage-driver": "overlay2",
+    "storage-opts": [
+        "overlay2.override_kernel_check=true"
+    ],
+    "log-driver": "json-file",
+    "log-opts": {
+        "max-size": "100m",
+        "max-file": "3"
+    },
+    "registry-mirrors": ["https://mirror.ccs.tencentyun.com"],
+    "features": {
+        "buildkit": true
+    },
+    "experimental": false,
+    "metrics-addr": "127.0.0.1:9323",
+    "max-concurrent-downloads": 10,
+    "max-concurrent-uploads": 5,
+    "default-ulimits": {
+        "nofile": {
+            "Name": "nofile",
+            "Hard": 64000,
+            "Soft": 64000
+        }
+    },
+    "userns-remap": "default",
+    "live-restore": true,
+    "log-level": "info",
+    "userland-proxy": false,
+    "no-new-privileges": true
 }
 ```
 
-## AppArmor配置
+## 系统参数配置
 
-openSUSE使用AppArmor作为安全模块。脚本已自动配置，但您可以手动管理：
+脚本已配置了优化的系统参数。配置文件位于：
+```bash
+/etc/sysctl.d/docker.conf
+```
+
+主要参数说明：
+```bash
+# 网络设置
+net.ipv4.ip_forward = 1                    # 启用IP转发
+net.bridge.bridge-nf-call-iptables = 1     # 启用桥接防火墙
+net.ipv4.conf.all.forwarding = 1           # 启用所有接口的IP转发
+
+# 内核参数
+kernel.pid_max = 4194304                   # 最大进程ID
+fs.file-max = 1000000                      # 最大文件句柄数
+fs.inotify.max_user_watches = 524288       # inotify监视限制
+
+# 网络调优
+net.core.somaxconn = 32768                 # 连接队列大小
+net.ipv4.tcp_max_syn_backlog = 8192        # TCP SYN队列大小
+net.core.netdev_max_backlog = 16384        # 网络设备积压队列大小
+```
+
+## 内核模块配置
+
+脚本已配置了必要的内核模块。配置文件位于：
+```bash
+/etc/modules-load.d/docker.conf
+```
+
+加载的模块包括：
+- overlay：用于overlay2存储驱动
+- br_netfilter：用于桥接网络
+- ip_vs*：用于负载均衡
+- nf_conntrack：用于连接跟踪
+
+## 安全配置
+
+### 1. AppArmor配置
+
+AppArmor提供了强制访问控制（MAC）系统：
 
 ```bash
 # 检查AppArmor状态
-sudo systemctl status apparmor
+sudo aa-status
 
-# 启动AppArmor
-sudo systemctl start apparmor
+# 查看Docker的AppArmor配置
+sudo aa-complain /etc/apparmor.d/docker
 
-# 设置开机自启
-sudo systemctl enable apparmor
-
-# 查看AppArmor配置文件
-ls /etc/apparmor.d/
+# 启用严格模式
+sudo aa-enforce /etc/apparmor.d/docker
 ```
 
-## 常用Docker命令
+### 2. 用户命名空间隔离
 
-- 启动Docker服务：
-  ```bash
-  sudo systemctl start docker
-  ```
-
-- 停止Docker服务：
-  ```bash
-  sudo systemctl stop docker
-  ```
-
-- 查看Docker状态：
-  ```bash
-  sudo systemctl status docker
-  ```
-
-- 设置Docker开机自启：
-  ```bash
-  sudo systemctl enable docker
-  ```
-
-## 防火墙配置
-
-openSUSE默认使用firewalld作为防火墙。脚本已配置以下规则：
+脚本已启用用户命名空间重映射，提供了额外的安全层：
 
 ```bash
-# 查看防火墙规则
-sudo firewall-cmd --list-all
+# 检查用户命名空间配置
+grep docker /etc/subuid /etc/subgid
 
-# 手动配置（如果需要）
-sudo firewall-cmd --permanent --zone=public --add-service=docker
-sudo firewall-cmd --permanent --zone=public --add-masquerade
-sudo firewall-cmd --reload
+# 验证隔离是否生效
+docker info | grep -i userns
 ```
 
-## 卸载说明
+### 3. 安全扫描
 
-如需卸载Docker和Docker Compose，执行以下命令：
+推荐使用以下工具进行安全扫描：
 
 ```bash
-# 停止所有运行中的容器
-docker stop $(docker ps -aq)
+# 安装Trivy
+sudo zypper install trivy
 
-# 删除所有容器
-docker rm $(docker ps -aq)
+# 扫描镜像
+trivy image <image-name>
 
-# 删除所有镜像
-docker rmi $(docker images -q)
+# 安装Docker Bench Security
+git clone https://github.com/docker/docker-bench-security.git
+cd docker-bench-security
+sudo sh docker-bench-security.sh
+```
 
-# 停止Docker服务
-sudo systemctl stop docker
+## 性能优化
 
-# 卸载Docker包
-sudo zypper remove -y docker-ce docker-ce-cli containerd.io
+### 1. 存储优化
 
-# 删除Docker数据目录
-sudo rm -rf /var/lib/docker
-sudo rm -rf /var/lib/containerd
+```bash
+# 定期清理未使用的镜像和容器
+docker system prune -af --volumes
 
-# 删除Docker Compose
-sudo rm /usr/local/bin/docker-compose
+# 监控磁盘使用
+docker system df -v
+```
 
-# 删除Docker配置
-sudo rm -rf /etc/docker
+### 2. 网络优化
+
+```bash
+# 使用host网络模式提高性能
+docker run --network host myapp
+
+# 使用macvlan网络
+docker network create -d macvlan \
+  --subnet=192.168.1.0/24 \
+  --gateway=192.168.1.1 \
+  -o parent=eth0 macnet
+```
+
+### 3. 内存优化
+
+```bash
+# 限制容器内存
+docker run -m 512m --memory-swap 1g myapp
+
+# 监控容器资源使用
+docker stats
 ```
 
 ## 故障排除
 
-1. 如果遇到仓库问题：
-   ```bash
-   # 重新添加Docker仓库
-   sudo zypper removerepo docker-ce
-   sudo zypper addrepo https://download.docker.com/linux/opensuse/docker-ce.repo
-   sudo zypper refresh
-   ```
+### 1. 常见错误
 
-2. 如果出现权限错误：
-   ```bash
-   # 确认当前用户在docker组中
-   groups
-   # 如果没有，手动添加
-   sudo usermod -aG docker $USER
-   ```
+#### 权限问题
+```bash
+# 检查用户组
+groups
+# 添加用户到docker组
+sudo usermod -aG docker $USER
+# 重新加载用户组
+newgrp docker
+```
 
-3. 如果Docker守护进程无法启动：
-   ```bash
-   # 检查系统日志
-   sudo journalctl -u docker.service
-   ```
+#### 网络问题
+```bash
+# 检查Docker网络
+docker network ls
+# 重建默认网络
+docker network rm bridge
+docker network create bridge
+```
 
-4. AppArmor相关问题：
-   ```bash
-   # 检查AppArmor状态
-   sudo aa-status
-   # 如果需要，重新加载配置
-   sudo systemctl reload apparmor
-   ```
+#### 存储问题
+```bash
+# 检查存储驱动
+docker info | grep "Storage Driver"
+# 清理存储空间
+docker system prune -af
+```
 
-## 性能优化建议
+### 2. 日志分析
 
-1. 调整日志配置：
-   ```json
-   {
-     "log-driver": "json-file",
-     "log-opts": {
-       "max-size": "10m",
-       "max-file": "3"
-     }
-   }
-   ```
+```bash
+# 查看Docker日志
+sudo journalctl -u docker.service
 
-2. 配置镜像加速：
-   ```json
-   {
-     "registry-mirrors": [
-       "https://mirror.gcr.io",
-       "https://docker.mirrors.ustc.edu.cn"
-     ]
-   }
-   ```
+# 查看容器日志
+docker logs <container-id>
 
-3. 配置容器DNS：
-   ```json
-   {
-     "dns": ["8.8.8.8", "8.8.4.4"]
-   }
-   ```
+# 启用调试模式
+sudo systemctl edit docker.service
+# 添加以下内容：
+[Service]
+Environment="DOCKER_OPTS=--debug"
+```
 
-## 安全建议
+### 3. 性能问题
 
-1. 保持系统和Docker更新：
+```bash
+# 检查系统负载
+top
+htop
+
+# 检查Docker统计信息
+docker stats
+
+# 检查磁盘I/O
+iostat -x 1
+```
+
+## 最佳实践
+
+1. 定期更新系统和Docker
    ```bash
    sudo zypper update
    ```
 
-2. 限制容器资源：
-   ```bash
-   # 限制内存
-   docker run -m 512m myapp
+2. 使用多阶段构建减小镜像大小
+   ```dockerfile
+   FROM golang:1.21 as builder
+   WORKDIR /app
+   COPY . .
+   RUN go build -o main
 
-   # 限制CPU
-   docker run --cpus=.5 myapp
+   FROM alpine:latest
+   COPY --from=builder /app/main /main
+   CMD ["/main"]
    ```
 
-3. 使用安全扫描：
+3. 使用健康检查
+   ```dockerfile
+   HEALTHCHECK --interval=30s --timeout=3s \
+     CMD curl -f http://localhost/ || exit 1
+   ```
+
+4. 实施资源限制
    ```bash
-   # 安装漏洞扫描工具
-   sudo zypper install openscap-utils
+   docker run \
+     --memory="1g" \
+     --memory-swap="2g" \
+     --cpus="1.5" \
+     --pids-limit=100 \
+     myapp
    ```
 
 ## 其他资源
@@ -249,3 +331,4 @@ sudo rm -rf /etc/docker
 - [openSUSE官方文档](https://doc.opensuse.org/)
 - [Docker Hub](https://hub.docker.com/)
 - [openSUSE Docker Wiki](https://en.opensuse.org/Docker)
+- [Docker安全最佳实践](https://docs.docker.com/develop/security-best-practices/)

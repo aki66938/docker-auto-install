@@ -18,10 +18,12 @@ emerge --sync
 
 # 检查并配置必要的USE标志
 echo "配置USE标志..."
+mkdir -p /etc/portage/package.use
 cat > /etc/portage/package.use/docker <<EOF
-app-emulation/docker aufs btrfs overlay device-mapper
+app-containers/docker btrfs overlay device-mapper
 sys-libs/libseccomp static-libs
-app-emulation/containerd btrfs
+app-containers/containerd btrfs
+app-containers/docker-cli -cli-plugins
 EOF
 
 # 检查并配置必要的内核选项
@@ -52,6 +54,9 @@ CONFIG_CHECK=(
     "IP_VS"
     "IP_VS_RR"
     "OVERLAY_FS"
+    "EXT4_FS"
+    "EXT4_FS_POSIX_ACL"
+    "EXT4_FS_SECURITY"
 )
 
 KERNEL_CONFIG="/usr/src/linux/.config"
@@ -71,18 +76,23 @@ fi
 echo "安装必要的依赖..."
 emerge -av \
     sys-libs/libseccomp \
-    app-emulation/containerd \
+    app-containers/containerd \
     dev-libs/libltdl \
     sys-process/tini \
-    app-containers/docker-proxy
+    app-containers/docker-proxy \
+    app-containers/docker-cli
 
 # 安装Docker
 echo "安装Docker..."
-emerge -av app-emulation/docker
+emerge -av app-containers/docker
 
 # 安装Docker Compose
 echo "安装Docker Compose..."
 emerge -av app-containers/docker-compose
+
+# 安装Docker Buildx
+echo "安装Docker Buildx..."
+emerge -av app-containers/docker-buildx
 
 # 启动Docker服务
 echo "启动Docker服务..."
@@ -96,8 +106,8 @@ CURRENT_USER=$(who am i | awk '{print $1}')
 echo "将用户添加到docker组..."
 usermod -aG docker $CURRENT_USER
 
-# 配置存储驱动
-echo "配置Docker存储驱动..."
+# 配置Docker
+echo "配置Docker..."
 mkdir -p /etc/docker
 cat > /etc/docker/daemon.json <<EOF
 {
@@ -107,13 +117,17 @@ cat > /etc/docker/daemon.json <<EOF
   ],
   "log-driver": "json-file",
   "log-opts": {
-    "max-size": "10m",
+    "max-size": "100m",
     "max-file": "3"
   },
-  "registry-mirrors": [
-    "https://mirror.gcr.io",
-    "https://docker.mirrors.ustc.edu.cn"
-  ]
+  "registry-mirrors": ["https://mirror.ccs.tencentyun.com"],
+  "features": {
+    "buildkit": true
+  },
+  "experimental": true,
+  "metrics-addr": "127.0.0.1:9323",
+  "max-concurrent-downloads": 10,
+  "max-concurrent-uploads": 10
 }
 EOF
 
@@ -122,6 +136,8 @@ echo "配置系统参数..."
 cat > /etc/sysctl.d/99-docker.conf <<EOF
 # 允许IP转发
 net.ipv4.ip_forward = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
 
 # 最大文件句柄数
 fs.file-max = 2097152
@@ -141,37 +157,35 @@ net.core.wmem_max = 16777216
 net.ipv4.tcp_congestion_control = bbr
 EOF
 
-sysctl -p /etc/sysctl.d/99-docker.conf
+sysctl --system
+
+# 配置内核模块
+echo "配置内核模块..."
+cat > /etc/modules-load.d/docker.conf <<EOF
+overlay
+br_netfilter
+EOF
+
+# 加载必要的内核模块
+modprobe overlay
+modprobe br_netfilter
 
 # 重启Docker服务以应用配置
 echo "重启Docker服务..."
 rc-service docker restart
 
-# 安装命令补全
-echo "安装命令补全..."
-emerge -av app-shells/bash-completion
-
-# 为bash安装Docker命令补全
-if [ -d /usr/share/bash-completion/completions ]; then
-    curl -L https://raw.githubusercontent.com/docker/compose/master/contrib/completion/bash/docker-compose -o /usr/share/bash-completion/completions/docker-compose
-fi
-
-# 为zsh安装命令补全（如果安装了zsh）
-if [ -d /usr/share/zsh/site-functions ]; then
-    curl -L https://raw.githubusercontent.com/docker/compose/master/contrib/completion/zsh/_docker-compose -o /usr/share/zsh/site-functions/_docker-compose
-fi
-
 # 检查NVIDIA显卡并安装NVIDIA Docker支持
 if lspci | grep -i nvidia > /dev/null; then
     echo "检测到NVIDIA显卡，安装NVIDIA Docker支持..."
-    emerge -av app-emulation/nvidia-container-toolkit
+    emerge -av app-containers/nvidia-container-toolkit
     rc-service docker restart
 fi
 
 # 验证安装
 echo "验证Docker安装..."
 docker --version
-docker-compose --version
+docker compose version
+docker buildx version
 
 # 运行测试容器
 echo "运行测试容器..."
@@ -179,32 +193,26 @@ docker run hello-world
 
 echo "Docker和Docker Compose安装完成！"
 echo "请注意："
-echo "1. 请注销并重新登录以使用户组权限生效"
+echo "1. 请注销并重新登录以使用用户组权限生效"
 echo "2. 已启用overlay2存储驱动"
 echo "3. 已配置日志轮转"
-echo "4. 已启用IP转发"
-echo "5. 已配置镜像加速器"
+echo "4. 已启用IP转发和桥接过滤"
+echo "5. 已启用BuildKit和实验性功能"
+echo "6. 已配置腾讯云镜像加速"
+echo "7. 已启用Docker指标收集"
 if lspci | grep -i nvidia > /dev/null; then
-    echo "6. 已安装NVIDIA Docker支持"
+    echo "8. 已安装NVIDIA Docker支持"
 fi
-echo "7. 请确保内核已正确配置所有必要选项"
-echo "8. 如果在虚拟机中运行，建议重启系统"
+echo "9. 请确保内核已正确配置所有必要选项"
+echo "10. 如果在虚拟机中运行，建议重启系统"
 
 # 显示系统信息
 echo -e "\n系统信息："
 echo "Docker版本：$(docker --version)"
-echo "Docker Compose版本：$(docker-compose --version)"
+echo "Docker Compose版本：$(docker compose version)"
+echo "Docker Buildx版本：$(docker buildx version)"
 echo "存储驱动：$(docker info | grep "Storage Driver")"
 echo "Cgroup驱动：$(docker info | grep "Cgroup Driver")"
 echo "内核版本：$(uname -r)"
-
-# 检查是否需要额外的内核模块
-echo -e "\n检查内核模块..."
-modules="overlay br_netfilter ip_vs ip_vs_rr ip_vs_wrr ip_vs_sh"
-for module in $modules; do
-    if ! lsmod | grep -q "^$module"; then
-        echo "加载内核模块: $module"
-        modprobe $module
-        echo "$module" >> /etc/modules-load.d/docker.conf
-    fi
-done
+echo "已加载的内核模块："
+lsmod | grep -E "overlay|br_netfilter"

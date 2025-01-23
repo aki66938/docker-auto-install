@@ -5,27 +5,30 @@
 ## 系统要求
 
 - Manjaro Linux（最新版本）
-- 64位系统
+- 64位系统架构（x86_64、aarch64或armv7l）
 - Linux内核版本 5.x 或更高
+- 至少2GB内存（推荐4GB或更多）
+- 至少20GB可用磁盘空间
+- 支持的文件系统：ext4、xfs、overlay2
 - 已启用以下内核模块：
-  - overlay
-  - br_netfilter
-  - ip_vs
-  - ip_vs_rr
-  - ip_vs_wrr
-  - ip_vs_sh
+  - overlay：用于overlay2存储驱动
+  - br_netfilter：用于容器网络
+  - ip_vs*：用于负载均衡
+  - nf_conntrack：用于连接跟踪
 
 ## 特别说明
 
 本安装脚本包含以下特性：
 1. 使用pamac包管理器安装Docker
-2. 自动更新镜像源（使用pacman-mirrors）
-3. 配置内核参数和模块
-4. 启用overlay2存储驱动
-5. 配置命令补全（支持bash和zsh）
-6. 配置UFW防火墙规则（如果安装了UFW）
-7. NVIDIA Docker支持（如果检测到NVIDIA显卡）
-8. 系统性能优化
+2. 自动检测系统架构和硬件要求
+3. 自动更新镜像源（使用pacman-mirrors）
+4. 配置内核参数和模块优化
+5. 启用overlay2存储驱动和用户命名空间隔离
+6. 配置AppArmor和审计（Audit）
+7. 配置命令补全（支持bash和zsh）
+8. 配置UFW防火墙规则（如果安装了UFW）
+9. NVIDIA Docker支持（如果检测到NVIDIA显卡）
+10. 系统性能优化和安全加固
 
 ## 安装步骤
 
@@ -56,238 +59,318 @@
 docker --version
 
 # 检查Docker Compose版本
-docker-compose --version
+docker compose version
+
+# 检查Docker Buildx版本
+docker buildx version
 
 # 验证Docker权限
 docker ps
 
 # 运行测试容器
 docker run hello-world
+
+# 检查Docker信息
+docker info
 ```
 
-## 存储驱动配置
+## Docker守护进程配置
 
-脚本已配置使用overlay2存储驱动。配置文件位于：
+脚本已配置了优化的Docker daemon设置。配置文件位于：
 ```bash
 sudo vim /etc/docker/daemon.json
 ```
 
-默认配置如下：
+默认配置说明：
 ```json
 {
-  "storage-driver": "overlay2",
-  "storage-opts": [
-    "overlay2.override_kernel_check=true"
-  ],
-  "log-driver": "json-file",
-  "log-opts": {
-    "max-size": "10m",
-    "max-file": "3"
-  },
-  "registry-mirrors": [
-    "https://mirror.gcr.io",
-    "https://docker.mirrors.ustc.edu.cn"
-  ]
+    "storage-driver": "overlay2",
+    "storage-opts": [
+        "overlay2.override_kernel_check=true"
+    ],
+    "log-driver": "json-file",
+    "log-opts": {
+        "max-size": "100m",
+        "max-file": "3"
+    },
+    "registry-mirrors": [
+        "https://mirror.gcr.io",
+        "https://docker.mirrors.ustc.edu.cn"
+    ],
+    "features": {
+        "buildkit": true
+    },
+    "experimental": false,
+    "metrics-addr": "127.0.0.1:9323",
+    "max-concurrent-downloads": 10,
+    "max-concurrent-uploads": 5,
+    "default-ulimits": {
+        "nofile": {
+            "Name": "nofile",
+            "Hard": 64000,
+            "Soft": 64000
+        }
+    },
+    "userns-remap": "default",
+    "live-restore": true,
+    "log-level": "info",
+    "userland-proxy": false,
+    "no-new-privileges": true,
+    "default-runtime": "runc",
+    "runtimes": {
+        "runc": {
+            "path": "runc"
+        }
+    }
 }
+```
+
+## 系统参数配置
+
+脚本已配置了优化的系统参数。配置文件位于：
+```bash
+/etc/sysctl.d/docker.conf
+```
+
+主要参数说明：
+```bash
+# 网络设置
+net.ipv4.ip_forward = 1                    # 启用IP转发
+net.bridge.bridge-nf-call-iptables = 1     # 启用桥接防火墙
+net.ipv4.conf.all.forwarding = 1           # 启用所有接口的IP转发
+
+# 内核参数
+kernel.pid_max = 4194304                   # 最大进程ID
+fs.file-max = 1000000                      # 最大文件句柄数
+fs.inotify.max_user_watches = 524288       # inotify监视限制
+
+# 网络调优
+net.core.somaxconn = 32768                 # 连接队列大小
+net.ipv4.tcp_max_syn_backlog = 8192        # TCP SYN队列大小
+net.core.netdev_max_backlog = 16384        # 网络设备积压队列大小
+
+# TCP优化
+net.ipv4.tcp_rmem = 4096 87380 16777216    # TCP读缓冲区
+net.ipv4.tcp_wmem = 4096 87380 16777216    # TCP写缓冲区
+net.ipv4.tcp_mtu_probing = 1               # 启用MTU探测
+net.ipv4.tcp_congestion_control = bbr      # 使用BBR拥塞控制
+```
+
+## 安全配置
+
+### 1. AppArmor配置
+
+AppArmor提供了强制访问控制（MAC）系统：
+
+```bash
+# 检查AppArmor状态
+sudo aa-status
+
+# 查看Docker的AppArmor配置
+sudo aa-complain /etc/apparmor.d/docker
+
+# 启用严格模式
+sudo aa-enforce /etc/apparmor.d/docker
+```
+
+### 2. 审计（Audit）配置
+
+审计系统可以监控Docker相关的操作：
+
+```bash
+# 检查审计状态
+sudo auditctl -l
+
+# 查看Docker相关审计日志
+sudo ausearch -k docker
+
+# 生成审计报告
+sudo aureport -k
+```
+
+### 3. 用户命名空间隔离
+
+脚本已启用用户命名空间重映射，提供了额外的安全层：
+
+```bash
+# 检查用户命名空间配置
+grep docker /etc/subuid /etc/subgid
+
+# 验证隔离是否生效
+docker info | grep -i userns
+```
+
+### 4. 安全扫描
+
+推荐使用以下工具进行安全扫描：
+
+```bash
+# 安装Trivy
+pamac install trivy
+
+# 扫描镜像
+trivy image <image-name>
+
+# 安装Docker Bench Security
+git clone https://github.com/docker/docker-bench-security.git
+cd docker-bench-security
+sudo sh docker-bench-security.sh
 ```
 
 ## NVIDIA Docker支持
 
-如果系统中安装了NVIDIA显卡，脚本会自动安装NVIDIA Docker支持：
+如果系统中安装了NVIDIA显卡，脚本会自动安装和配置NVIDIA容器工具包：
 
 ```bash
 # 验证NVIDIA Docker安装
 docker run --gpus all nvidia/cuda:11.0-base nvidia-smi
 
-# 查看NVIDIA Docker配置
-nvidia-container-cli info
+# 查看NVIDIA运行时配置
+cat /etc/nvidia-container-runtime/config.toml
+
+# 检查NVIDIA容器工具包版本
+nvidia-container-cli -V
 ```
 
-## 内核模块配置
+## 性能优化
 
-脚本会自动检查和加载必要的内核模块。您可以手动检查：
+### 1. 存储优化
 
 ```bash
-# 检查已加载的模块
-lsmod | grep -E 'overlay|br_netfilter|ip_vs'
+# 定期清理未使用的镜像和容器
+docker system prune -af --volumes
 
-# 手动加载模块
-sudo modprobe overlay
-sudo modprobe br_netfilter
+# 监控磁盘使用
+docker system df -v
+
+# 使用多阶段构建减小镜像大小
+FROM golang:1.21 as builder
+WORKDIR /app
+COPY . .
+RUN go build -o main
+
+FROM alpine:latest
+COPY --from=builder /app/main /main
+CMD ["/main"]
 ```
 
-## 系统优化
-
-脚本已经配置了一些系统优化参数。查看优化配置：
+### 2. 网络优化
 
 ```bash
-# 查看系统优化参数
-cat /etc/sysctl.d/99-docker-tune.conf
+# 使用host网络模式提高性能
+docker run --network host myapp
 
-# 应用优化参数
-sudo sysctl -p /etc/sysctl.d/99-docker-tune.conf
+# 使用macvlan网络
+docker network create -d macvlan \
+  --subnet=192.168.1.0/24 \
+  --gateway=192.168.1.1 \
+  -o parent=eth0 macnet
 ```
 
-## 常用Docker命令
-
-- 启动Docker服务：
-  ```bash
-  sudo systemctl start docker
-  ```
-
-- 停止Docker服务：
-  ```bash
-  sudo systemctl stop docker
-  ```
-
-- 查看Docker状态：
-  ```bash
-  sudo systemctl status docker
-  ```
-
-- 设置Docker开机自启：
-  ```bash
-  sudo systemctl enable docker
-  ```
-
-## 防火墙配置
-
-如果使用UFW防火墙，脚本已配置必要的规则。手动配置方法：
+### 3. 内存优化
 
 ```bash
-# 开放Docker端口
-sudo ufw allow 2375/tcp
-sudo ufw allow 2376/tcp
+# 限制容器内存
+docker run -m 512m --memory-swap 1g myapp
 
-# 允许容器间通信
-sudo ufw allow in on docker0
-```
-
-## 镜像加速
-
-脚本已配置国内镜像加速。如需手动修改：
-
-```bash
-sudo vim /etc/docker/daemon.json
-```
-
-添加或修改以下内容：
-```json
-{
-  "registry-mirrors": [
-    "https://mirror.gcr.io",
-    "https://docker.mirrors.ustc.edu.cn"
-  ]
-}
-```
-
-## 卸载说明
-
-如需卸载Docker和Docker Compose，执行以下命令：
-
-```bash
-# 停止所有运行中的容器
-docker stop $(docker ps -aq)
-
-# 删除所有容器
-docker rm $(docker ps -aq)
-
-# 删除所有镜像
-docker rmi $(docker images -q)
-
-# 停止Docker服务
-sudo systemctl stop docker
-
-# 卸载Docker包
-sudo pamac remove docker docker-compose
-
-# 如果安装了NVIDIA Docker支持
-sudo pamac remove nvidia-container-toolkit
-
-# 删除Docker数据目录
-sudo rm -rf /var/lib/docker
-sudo rm -rf /var/lib/containerd
-
-# 删除Docker配置
-sudo rm -rf /etc/docker
+# 监控容器资源使用
+docker stats
 ```
 
 ## 故障排除
 
-1. 如果遇到权限问题：
+### 1. 常见错误
+
+#### 权限问题
+```bash
+# 检查用户组
+groups
+# 添加用户到docker组
+sudo usermod -aG docker $USER
+# 重新加载用户组
+newgrp docker
+```
+
+#### 网络问题
+```bash
+# 检查Docker网络
+docker network ls
+# 重建默认网络
+docker network rm bridge
+docker network create bridge
+```
+
+#### 存储问题
+```bash
+# 检查存储驱动
+docker info | grep "Storage Driver"
+# 清理存储空间
+docker system prune -af
+```
+
+### 2. 日志分析
+
+```bash
+# 查看Docker日志
+sudo journalctl -u docker.service
+
+# 查看容器日志
+docker logs <container-id>
+
+# 启用调试模式
+sudo systemctl edit docker.service
+# 添加以下内容：
+[Service]
+Environment="DOCKER_OPTS=--debug"
+```
+
+### 3. 性能问题
+
+```bash
+# 检查系统负载
+top
+htop
+
+# 检查Docker统计信息
+docker stats
+
+# 检查磁盘I/O
+iostat -x 1
+```
+
+## 最佳实践
+
+1. 定期更新系统和Docker
    ```bash
-   # 确认当前用户在docker组中
-   groups
-   # 如果没有，手动添加
-   sudo usermod -aG docker $USER
-   ```
-
-2. 如果Docker守护进程无法启动：
-   ```bash
-   # 检查系统日志
-   sudo journalctl -u docker.service
-   ```
-
-3. 如果遇到内核模块问题：
-   ```bash
-   # 检查内核模块
-   lsmod | grep overlay
-   # 手动加载模块
-   sudo modprobe overlay
-   ```
-
-4. 镜像下载慢：
-   ```bash
-   # 检查当前镜像源
-   docker info | grep "Registry Mirrors"
-   # 更新镜像源
-   sudo vim /etc/docker/daemon.json
-   ```
-
-## 性能优化建议
-
-1. 使用更快的存储驱动：
-   ```json
-   {
-     "storage-driver": "overlay2"
-   }
-   ```
-
-2. 启用TCP BBR拥塞控制：
-   ```bash
-   # 检查是否启用
-   sysctl net.ipv4.tcp_congestion_control
-   ```
-
-3. 调整系统限制：
-   ```bash
-   # 检查当前限制
-   ulimit -a
-   # 修改限制
-   sudo vim /etc/security/limits.conf
-   ```
-
-## 安全建议
-
-1. 保持系统和Docker更新：
-   ```bash
-   sudo pacman-mirrors --fasttrack
    sudo pacman -Syu
    ```
 
-2. 限制容器资源：
-   ```bash
-   # 限制内存
-   docker run -m 512m myapp
+2. 使用多阶段构建减小镜像大小
+   ```dockerfile
+   FROM golang:1.21 as builder
+   WORKDIR /app
+   COPY . .
+   RUN go build -o main
 
-   # 限制CPU
-   docker run --cpus=.5 myapp
+   FROM alpine:latest
+   COPY --from=builder /app/main /main
+   CMD ["/main"]
    ```
 
-3. 使用安全扫描：
+3. 使用健康检查
+   ```dockerfile
+   HEALTHCHECK --interval=30s --timeout=3s \
+     CMD curl -f http://localhost/ || exit 1
+   ```
+
+4. 实施资源限制
    ```bash
-   # 安装容器安全扫描工具
-   sudo pamac install trivy
+   docker run \
+     --memory="1g" \
+     --memory-swap="2g" \
+     --cpus="1.5" \
+     --pids-limit=100 \
+     myapp
    ```
 
 ## 其他资源
@@ -295,4 +378,5 @@ sudo rm -rf /etc/docker
 - [Docker官方文档](https://docs.docker.com/)
 - [Manjaro Wiki](https://wiki.manjaro.org/)
 - [Docker Hub](https://hub.docker.com/)
-- [Manjaro论坛](https://forum.manjaro.org/)
+- [Docker安全最佳实践](https://docs.docker.com/develop/security-best-practices/)
+- [NVIDIA容器工具包文档](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/overview.html)

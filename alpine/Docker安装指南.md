@@ -1,30 +1,21 @@
-# Kali Linux系统 Docker 和 Docker Compose 安装指南
+# Alpine Linux系统 Docker 和 Docker Compose 安装指南
 
-本文档提供了在Kali Linux系统上安装Docker和Docker Compose的详细说明。本指南遵循Docker官方最佳实践和安全建议。
+本文档提供了在Alpine Linux系统上安装Docker和Docker Compose的脚本和使用说明。
 
-## 系统要求
+## 安装脚本
 
-- Kali Linux（基于Debian）
-- 支持的系统架构：
-  - x86_64 (amd64)
-  - aarch64 (arm64)
-  - armv7l (armhf)
-- 建议内存：2GB或更多
-- 内核版本：3.10或更高
-- 必需的内核模块：
-  - overlay
-  - br_netfilter
-  - ip_vs
-  - ip_vs_rr
-  - ip_vs_wrr
-  - ip_vs_sh
-  - nf_conntrack
+将以下内容保存为 `install-docker.sh`：
 
-## 安装步骤
+```bash
+#!/bin/sh
+# 脚本内容已保存在同目录下的install-docker.sh文件中
+```
 
-1. 下载安装脚本：
+## 使用说明
+
+1. 首先，确保你的Alpine系统已经更新到最新：
    ```bash
-   wget https://raw.githubusercontent.com/your-repo/docker-auto-install/main/kali/install-docker.sh
+   apk update && apk upgrade
    ```
 
 2. 给脚本添加执行权限：
@@ -32,89 +23,101 @@
    chmod +x install-docker.sh
    ```
 
-3. 以root权限执行安装脚本：
+3. 执行安装脚本：
    ```bash
-   sudo ./install-docker.sh
+   ./install-docker.sh
    ```
 
-4. 安装完成后，**必须**注销并重新登录以使用户组权限生效。如果在虚拟机中运行，建议重启系统。
+4. 安装完成后，注销并重新登录以使组权限生效。
 
-## 验证安装
+5. 验证安装：
+   ```bash
+   # 检查Docker版本
+   docker --version
+   
+   # 检查Docker Compose版本
+   docker compose version
+   
+   # 运行测试容器
+   docker run hello-world
+   ```
 
-重新登录后，运行以下命令验证安装：
+## 常用Docker命令
 
-```bash
-# 检查Docker版本
-docker --version
+- 启动Docker服务：
+  ```bash
+  service docker start
+  ```
 
-# 检查Docker Compose版本
-docker compose version
+- 停止Docker服务：
+  ```bash
+  service docker stop
+  ```
 
-# 检查Docker Buildx版本
-docker buildx version
+- 查看Docker状态：
+  ```bash
+  service docker status
+  ```
 
-# 验证Docker权限
-docker ps
+- 设置Docker开机自启：
+  ```bash
+  rc-update add docker boot
+  ```
 
-# 运行测试容器
-docker run hello-world
-```
+## 卸载说明
 
-## 配置说明
-
-### Docker配置
-
-Docker的主要配置文件位于 `/etc/docker/daemon.json`，包含以下优化设置：
-
-```json
-{
-    "storage-driver": "overlay2",
-    "storage-opts": [
-        "overlay2.override_kernel_check=true"
-    ],
-    "log-driver": "json-file",
-    "log-opts": {
-        "max-size": "100m",
-        "max-file": "3"
-    },
-    "registry-mirrors": ["https://mirror.ccs.tencentyun.com"],
-    "features": {
-        "buildkit": true
-    },
-    "experimental": false,
-    "metrics-addr": "127.0.0.1:9323",
-    "max-concurrent-downloads": 10,
-    "max-concurrent-uploads": 5,
-    "default-ulimits": {
-        "nofile": {
-            "Name": "nofile",
-            "Hard": 64000,
-            "Soft": 64000
-        }
-    },
-    "userns-remap": "default",
-    "live-restore": true,
-    "log-level": "info",
-    "userland-proxy": false,
-    "no-new-privileges": true
-}
-```
-
-### 系统参数
-
-系统优化参数位于 `/etc/sysctl.d/docker.conf`：
+如需卸载Docker和Docker Compose，可执行以下命令：
 
 ```bash
-# 网络设置
-net.ipv4.ip_forward = 1
-net.bridge.bridge-nf-call-iptables = 1
-net.bridge.bridge-nf-call-ip6tables = 1
-net.ipv4.conf.all.forwarding = 1
-net.ipv6.conf.all.forwarding = 1
+# 停止Docker服务
+service docker stop
 
-# 内核参数
-kernel.pid_max = 4194304
-fs.file-max = 1000000
+# 移除开机自启
+rc-update del docker boot
+
+# 卸载Docker相关包
+apk del docker docker-cli docker-engine docker-compose docker-buildx containerd
+
+# 删除Docker数据目录
+rm -rf /var/lib/docker
+rm -rf /var/lib/containerd
+
+# 删除Docker配置
+rm -rf /etc/docker
+```
+
+## 注意事项
+
+1. 安装过程需要root权限
+2. 确保系统已经更新到最新版本
+3. 安装完成后需要重新登录以使用户组权限生效
+4. Alpine Linux使用OpenRC而不是systemd进行服务管理
+5. 如果遇到网络问题，可能需要配置代理或更换软件源
+
+## 故障排除
+
+如果遇到问题，可以检查以下几点：
+
+1. 确认Alpine版本兼容性
+2. 检查网络连接
+3. 查看Docker服务状态：`service docker status`
+4. 检查系统日志：`cat /var/log/docker.log`
+5. 确保没有端口冲突
+6. 检查防火墙设置
+7. 确保必要的内核模块已加载：`lsmod | grep -E "overlay|br_netfilter"`
+
+## 系统要求
+
+- Alpine Linux 64位系统
+- 建议Alpine版本：3.15或更高版本
+- 至少1GB内存（由于Alpine的轻量级特性）
+- 支持以下CPU架构：
+  - x86_64 (amd64)
+  - armhf
+  - aarch64
+  - s390x
+  - ppc64le
+
 fs.inotify.max_user_watches = 524288
 fs.inotify.max_user_instances = 8192
 
@@ -139,27 +142,27 @@ net.ipv4.tcp_tw_reuse = 1
 
 - 启动Docker服务：
   ```bash
-  sudo systemctl start docker
+  service docker start
   ```
 
 - 停止Docker服务：
   ```bash
-  sudo systemctl stop docker
+  service docker stop
   ```
 
 - 重启Docker服务：
   ```bash
-  sudo systemctl restart docker
+  service docker restart
   ```
 
 - 查看Docker状态：
   ```bash
-  sudo systemctl status docker
+  service docker status
   ```
 
 - 设置开机自启：
   ```bash
-  sudo systemctl enable docker
+  rc-update add docker boot
   ```
 
 ### 容器管理
@@ -238,13 +241,17 @@ docker rm $(docker ps -aq)
 docker rmi $(docker images -q)
 
 # 停止Docker服务
-systemctl stop docker
+service docker stop
 
 # 移除开机自启
-systemctl disable docker
+rc-update del docker boot
 
 # 卸载Docker相关包
-apt-get remove -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+apk del docker docker-cli docker-engine docker-compose docker-buildx \
+    containerd docker-compose-bash-completion docker-bash-completion
+
+# 如果安装了NVIDIA Docker支持
+apk del nvidia-container-toolkit
 
 # 删除Docker数据目录
 rm -rf /var/lib/docker
@@ -273,12 +280,12 @@ sysctl --system
 
 1. 权限问题
    - 检查用户是否在docker组中：`groups`
-   - 如果不在，添加用户到docker组：`sudo usermod -aG docker $USER`
+   - 如果不在，添加用户到docker组：`sudo adduser $USER docker`
    - 重新登录以使更改生效
 
 2. 服务启动问题
-   - 检查服务状态：`systemctl status docker`
-   - 查看系统日志：`journalctl -u docker`
+   - 检查服务状态：`service docker status`
+   - 查看系统日志：`cat /var/log/docker/docker.log`
    - 检查Docker守护进程日志：`docker info`
 
 3. 网络问题
@@ -328,6 +335,6 @@ sysctl --system
 ## 其他资源
 
 - [Docker官方文档](https://docs.docker.com/)
-- [Kali Linux官方网站](https://www.kali.org/)
+- [Alpine Linux官方网站](https://alpinelinux.org/)
 - [Docker Hub](https://hub.docker.com/)
-- [Docker安全最佳实践](https://docs.docker.com/engine/security/)
+- [Alpine Linux Wiki](https://wiki.alpinelinux.org/)

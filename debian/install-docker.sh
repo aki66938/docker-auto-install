@@ -21,26 +21,33 @@ apt-get update
 
 # 安装必要的依赖包
 apt-get install -y \
-    apt-transport-https \
     ca-certificates \
     curl \
     gnupg \
-    lsb-release \
-    software-properties-common
+    lsb-release
+
+# 创建密钥目录
+mkdir -p /etc/apt/keyrings
 
 # 添加Docker的官方GPG密钥
-curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+chmod a+r /etc/apt/keyrings/docker.gpg
 
 # 设置稳定版仓库
 echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
   $OS_VERSION stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
 
 # 更新apt包索引
 apt-get update
 
-# 安装Docker Engine
-apt-get install -y docker-ce docker-ce-cli containerd.io
+# 安装Docker Engine和相关组件
+apt-get install -y \
+    docker-ce \
+    docker-ce-cli \
+    containerd.io \
+    docker-buildx-plugin \
+    docker-compose-plugin
 
 # 启动Docker服务
 systemctl start docker
@@ -65,20 +72,11 @@ EOF
 systemctl daemon-reload
 systemctl restart docker
 
-# 安装Docker Compose
-curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-chmod +x /usr/local/bin/docker-compose
-
-# 安装命令补全（可选）
-if [ -d /etc/bash_completion.d ]; then
-    curl -L https://raw.githubusercontent.com/docker/compose/master/contrib/completion/bash/docker-compose -o /etc/bash_completion.d/docker-compose
-fi
-
 # 验证安装
 echo "验证Docker安装："
 docker --version
 echo "验证Docker Compose安装："
-docker-compose --version
+docker compose version
 
 # 运行测试容器
 echo "运行测试容器："
