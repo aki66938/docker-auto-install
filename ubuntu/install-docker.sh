@@ -13,7 +13,9 @@ check_command() {
 }
 
 # 清理旧的Docker安装（如果存在）
-sudo apt-get remove -y docker docker-engine docker.io containerd runc || true
+for pkg in docker.io docker-doc docker-compose podman-docker containerd runc; do
+    sudo apt-get remove -y $pkg || true
+done
 
 # 更新包索引
 sudo apt-get update
@@ -27,34 +29,20 @@ sudo apt-get install -y \
     lsb-release
 
 # 创建keyrings目录（如果不存在）
-sudo mkdir -p /etc/apt/keyrings
+sudo install -m 0755 -d /etc/apt/keyrings
 
-# 添加Docker的官方GPG密钥（使用重试机制）
-max_attempts=3
-attempt=1
-while [ $attempt -le $max_attempts ]; do
-    if curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg; then
-        break
-    fi
-    echo "尝试 $attempt 下载 GPG 密钥失败，等待后重试..."
-    sleep 5
-    attempt=$((attempt + 1))
-done
+# 添加Docker的官方GPG密钥
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
 
-if [ $attempt -gt $max_attempts ]; then
-    echo "错误: 无法下载 Docker GPG 密钥，请检查网络连接"
-    exit 1
-fi
-
-# 设置正确的权限
-sudo chmod a+r /etc/apt/keyrings/docker.gpg
-
-# 设置稳定版仓库（使用新的仓库格式）
+# 添加Docker的存储库到Apt源
 echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
 # 更新apt包索引（使用重试机制）
+max_attempts=3
 attempt=1
 while [ $attempt -le $max_attempts ]; do
     if sudo apt-get update; then
@@ -71,7 +59,12 @@ if [ $attempt -gt $max_attempts ]; then
 fi
 
 # 安装Docker Engine和相关组件
-if ! sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; then
+if ! sudo apt-get install -y \
+    docker-ce \
+    docker-ce-cli \
+    containerd.io \
+    docker-buildx-plugin \
+    docker-compose-plugin; then
     echo "错误: Docker包安装失败"
     exit 1
 fi
