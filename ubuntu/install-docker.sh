@@ -32,11 +32,17 @@ sudo apt-get install -y \
 sudo install -m 0755 -d /etc/apt/keyrings
 
 # 下载并添加Docker的官方GPG密钥
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-sudo chmod a+r /etc/apt/keyrings/docker.gpg
+# 如果下载失败，尝试使用不同的下载方式
+if ! curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg; then
+    echo "警告: 使用curl下载GPG密钥失败，尝试使用wget..."
+    if ! wget -qO- https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg; then
+        echo "错误: 无法下载Docker的GPG密钥"
+        exit 1
+    fi
+fi
 
-# 手动添加缺失的GPG密钥
-sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 7EA0A9C3F273FCD8
+# 设置正确的权限
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
 
 # 添加Docker的存储库到Apt源
 echo \
@@ -45,7 +51,11 @@ echo \
   sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
 # 更新apt包索引
-sudo apt-get update
+if ! sudo apt-get update; then
+    echo "错误: 无法更新包索引，可能是由于GPG密钥问题"
+    echo "请检查 /etc/apt/keyrings/docker.gpg 文件是否存在且权限正确"
+    exit 1
+fi
 
 # 安装Docker Engine和相关组件
 if ! sudo apt-get install -y \
