@@ -31,32 +31,21 @@ sudo apt-get install -y \
 # 创建keyrings目录（如果不存在）
 sudo install -m 0755 -d /etc/apt/keyrings
 
-# 添加Docker的官方GPG密钥
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
+# 下载并添加Docker的官方GPG密钥
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+# 手动添加缺失的GPG密钥
+sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 7EA0A9C3F273FCD8
 
 # 添加Docker的存储库到Apt源
 echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
   $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
   sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-# 更新apt包索引（使用重试机制）
-max_attempts=3
-attempt=1
-while [ $attempt -le $max_attempts ]; do
-    if sudo apt-get update; then
-        break
-    fi
-    echo "尝试 $attempt 更新包索引失败，等待后重试..."
-    sleep 5
-    attempt=$((attempt + 1))
-done
-
-if [ $attempt -gt $max_attempts ]; then
-    echo "错误: 无法更新包索引，请检查网络连接"
-    exit 1
-fi
+# 更新apt包索引
+sudo apt-get update
 
 # 安装Docker Engine和相关组件
 if ! sudo apt-get install -y \
